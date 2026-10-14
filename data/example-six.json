@@ -1,0 +1,14 @@
+{
+  "id": "synthetic-six-v1",
+  "name": "Enam titik · contoh sintetis",
+  "unit": "unit koordinat",
+  "provenance": "Dataset sintetis untuk pembelajaran, bukan data tugas resmi.",
+  "nodes": [
+    { "id": "A", "x": 0, "y": 0 },
+    { "id": "B", "x": 4, "y": 0 },
+    { "id": "C", "x": 7, "y": 3 },
+    { "id": "D", "x": 5, "y": 7 },
+    { "id": "E", "x": 1, "y": 6 },
+    { "id": "F", "x": -2, "y": 3 }
+  ]
+}
