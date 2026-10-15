@@ -31,6 +31,41 @@ Alamat preview biasanya http://127.0.0.1:4173. Gunakan origin/port yang sama unt
 sesi tersimpan: penyimpanan browser pada port dev dan preview berbeda. Build berada di `dist/`
 dan memerlukan server HTTP; membuka index.html sebagai file lokal tidak didukung.
 
+## Deploy melalui GitHub Actions dan Coolify
+
+GitHub Actions memeriksa proyek dengan `bun run check`, membangun image AMD64, lalu mem-push
+`kkafi09/heurilab:latest` dan tag commit ke Docker Hub. Workflow berjalan saat ada push ke `main`;
+workflow juga dapat dijalankan manual dari branch `main`. Coolify hanya dipicu setelah pemeriksaan
+dan push image berhasil.
+
+### Siapkan GitHub Actions
+
+Tambahkan repository secrets berikut di **Settings → Secrets and variables → Actions**:
+
+| Secret                   | Isi                                                                |
+| ------------------------ | ------------------------------------------------------------------ |
+| `DOCKERHUB_USERNAME`     | Username akun Docker Hub yang dapat mem-push ke `kkafi09/heurilab` |
+| `DOCKERHUB_TOKEN`        | Access token Docker Hub dengan izin push ke repository tersebut    |
+| `COOLIFY_DEPLOY_WEBHOOK` | URL deploy webhook terautentikasi dari aplikasi Coolify            |
+| `COOLIFY_TOKEN`          | API token Coolify dengan izin deploy                               |
+
+Jangan simpan nilai secret di repository. Pastikan repository `kkafi09/heurilab` tersedia dan public
+di Docker Hub.
+
+### Siapkan aplikasi Coolify
+
+1. Buat aplikasi bertipe **Docker Image** dan gunakan `kkafi09/heurilab:latest` sebagai image.
+2. Atur port internal aplikasi ke `80`. Coolify mengambil image dari Docker Hub; build tetap
+   dilakukan GitHub Actions.
+3. Salin URL deploy webhook dari pengaturan aplikasi. Buat API token Coolify dengan izin deploy,
+   lalu simpan URL dan token sebagai `COOLIFY_DEPLOY_WEBHOOK` dan `COOLIFY_TOKEN` di GitHub Actions.
+   Pada Coolify self-hosted, aktifkan API access di pengaturan Advanced jika belum aktif.
+4. Push perubahan ke `main` atau jalankan workflow manual dari `main`. Periksa GitHub Actions,
+   lalu status deployment aplikasi di Coolify.
+
+Image memuat situs statis Nginx pada port 80. Data sesi dan riwayat eksperimen tetap tersimpan lokal
+di browser pengguna.
+
 ## Cara menggunakan
 
 1. Gunakan contoh sintetis enam node atau edit tabel ID/X/Y. Klik **Terapkan** setelah selesai.
