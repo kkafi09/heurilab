@@ -75,13 +75,17 @@ export function comparisonCsv(runs: RunResult[]): string {
       run.config.maxIterations,
       run.initialCost,
       run.bestCost,
-      run.initialCost === 0 ? 0 : ((run.initialCost - run.bestCost) / run.initialCost) * 100,
+      run.category === "construction"
+        ? ""
+        : run.initialCost === 0
+          ? 0
+          : ((run.initialCost - run.bestCost) / run.initialCost) * 100,
       run.iterations,
       run.evaluations,
       run.durations?.constructionMs ?? "",
       run.durations?.preparationMs ?? "",
-      run.durations?.searchMs ?? "",
-      run.durationMs,
+      run.durations?.searchMs ?? (run.durations ? "" : run.durationMs),
+      run.durations?.totalMs ?? "",
       run.status,
       run.stopReason,
       JSON.stringify(run.config),

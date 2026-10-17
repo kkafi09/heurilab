@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Download,
   ArrowLeft,
@@ -11,14 +11,22 @@ import {
   Trash2,
   CheckCircle2,
   GitCompare,
+  AlertTriangle,
+  Info,
+  SkipBack,
+  SkipForward,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
 } from "lucide-react";
 import { Button, Empty, formatNumber, stopLabels } from "../../components/ui";
 import { Select } from "../../components/ui/select";
-import { distanceMatrix, type Dataset } from "../../domain/tsp/model";
+import { distanceMatrix, closedRoute, type Dataset, type Route } from "../../domain/tsp/model";
 import {
   type RunResult,
   type TraceStep,
   type RunCategory,
+  reconstruct,
   EPSILON,
 } from "../../domain/algorithms/experiment";
 import { exportComparison, exportRun } from "../../services/export";
@@ -29,6 +37,7 @@ import {
   formatStageBreakdown,
   getMethodDisplayName,
   getMethodShortLabel,
+  areRoutesIdentical,
   evaluateComparisonCondition,
   calculateReportKPIs,
 } from "./formatters";
@@ -82,6 +91,25 @@ export function ReportView({
   const [selectedStep, setSelectedStep] = useState<number>(-1);
   const [tab, setTab] = useState<"comparison" | "trace" | "matrix">("comparison");
   const [matrixSource, setMatrixSource] = useState<"canvas" | "run">("canvas");
+
+  const [prevSelectedId, setPrevSelectedId] = useState(selectedRunId);
+  if (prevSelectedId !== selectedRunId) {
+    setPrevSelectedId(selectedRunId);
+    setSelectedStep(-1);
+    const target = runs.find((r) => r.id === selectedRunId);
+    if (target && target.category === "metaheuristic") {
+      const match = runs.find(
+        (r) =>
+          r.id !== target.id &&
+          r.category === "metaheuristic" &&
+          r.dataset.id === target.dataset.id &&
+          r.trace.length > 0,
+      );
+      setCompareRunId(match ? match.id : "");
+    } else {
+      setCompareRunId("");
+    }
+  }
 
   // Fallback acuan: jika acuan saat ini tidak ditemukan (misal dihapus), gunakan activeRun atau run terbaru
   const reference = runs.find((r) => r.id === referenceRunId) ?? activeRun ?? runs[0] ?? null;
@@ -603,7 +631,7 @@ export function ReportView({
                   Urutan Kunjungan Node
                 </h4>
                 <div className="font-mono text-xs text-slate-800 bg-white p-3 rounded-lg border border-slate-200 overflow-x-auto whitespace-nowrap">
-                  {run.bestRoute.join(" → ")} → {run.bestRoute[0]}
+                  {closedRoute(run.bestRoute, run.dataset).join(" → ")}
                 </div>
                 <p className="text-xs text-slate-500 mt-2">
                   Metode konstruksi membentuk rute lengkap secara deterministik langsung dari
@@ -694,13 +722,13 @@ export function ReportView({
                       Rute Dasar ({run.config.initialMethod}):{" "}
                     </span>
                     <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {run.initialRoute.join(" → ")} → {run.initialRoute[0]}
+                      {closedRoute(run.initialRoute, run.dataset).join(" → ")}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-500">Rute Hasil Perbaikan: </span>
                     <span className="font-mono bg-teal-50 text-teal-900 px-2 py-0.5 rounded border border-teal-200">
-                      {run.bestRoute.join(" → ")} → {run.bestRoute[0]}
+                      {closedRoute(run.bestRoute, run.dataset).join(" → ")}
                     </span>
                   </div>
                 </div>
@@ -709,6 +737,11 @@ export function ReportView({
               {run.trace.length > 0 && (
                 <div className="mt-4">
                   <CostConvergenceChart run={run} compareRun={null} />
+                  <TraceReplayViewer
+                    run={run}
+                    selectedStep={selectedStep}
+                    onSelectStep={setSelectedStep}
+                  />
                   <TraceTableComponent
                     run={run}
                     selected={selectedStep}
@@ -814,42 +847,98 @@ export function ReportView({
                   </div>
                 </div>
 
+                {/* Route Tour Details */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 my-3">
+                  <div>
+                    <span className="text-slate-500 font-medium">Rute Solusi Awal: </span>
+                    <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">
+                      {closedRoute(run.initialRoute, run.dataset).join(" → ")}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-teal-700 font-medium">Rute Terbaik Akhir: </span>
+                    <span className="font-mono bg-teal-50 text-teal-900 px-2 py-0.5 rounded border border-teal-200">
+                      {closedRoute(run.bestRoute, run.dataset).join(" → ")}
+                    </span>
+                  </div>
+                </div>
+
                 {/* Compare With Secondary Run Option */}
                 {runs.length > 1 && (
-                  <div className="flex items-center gap-3 text-xs text-slate-600 my-3 p-3 bg-slate-50/80 rounded-xl border border-slate-200">
-                    <div className="flex items-center gap-1.5 font-medium text-slate-700 whitespace-nowrap">
-                      <GitCompare size={15} className="text-teal-700" />
-                      <span>Bandingkan kurva:</span>
+                  <div className="space-y-2 my-3 p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-xs">
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5 font-medium text-slate-700 whitespace-nowrap">
+                        <GitCompare size={15} className="text-teal-700" />
+                        <span>Bandingkan kurva:</span>
+                      </div>
+                      <div className="max-w-xs flex-1">
+                        <Select
+                          value={compareRunId}
+                          onChange={(val) => setCompareRunId(val)}
+                          placeholder="Pilih run pembanding..."
+                          options={[
+                            { value: "", label: "(Tanpa pembanding)" },
+                            ...runs
+                              .filter((r) => r.id !== run.id && r.trace.length > 0)
+                              .map((r) => {
+                                const runNumber =
+                                  runs.length - runs.findIndex((x) => x.id === r.id);
+                                const isSameDataset = r.dataset.id === run.dataset.id;
+                                const isSameInitial = areRoutesIdentical(
+                                  r.initialRoute,
+                                  run.initialRoute,
+                                );
+                                const tag =
+                                  isSameDataset && isSameInitial
+                                    ? " [Sebanding]"
+                                    : isSameDataset
+                                      ? " [Beda Rute]"
+                                      : " [Beda Dataset]";
+                                return {
+                                  value: r.id,
+                                  label: `Run #${runNumber}: ${getMethodDisplayName(r)} (${formatDistance(r.bestCost)})${tag}`,
+                                  badge: r.config.algorithm,
+                                };
+                              }),
+                          ]}
+                        />
+                      </div>
+                      {compareRunId && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setCompareRunId("")}
+                          className="text-xs text-red-600 hover:bg-red-50"
+                        >
+                          Batal bandingkan
+                        </Button>
+                      )}
                     </div>
-                    <div className="max-w-xs flex-1">
-                      <Select
-                        value={compareRunId}
-                        onChange={(val) => setCompareRunId(val)}
-                        placeholder="Pilih run pembanding..."
-                        options={[
-                          { value: "", label: "(Tanpa pembanding)" },
-                          ...runs
-                            .filter((r) => r.id !== run.id && r.trace.length > 0)
-                            .map((r, i) => ({
-                              value: r.id,
-                              label: `Run #${runs.length - (i >= runs.findIndex((x) => x.id === run.id) ? i + 1 : i)}: ${getMethodTitle(
-                                r,
-                              )} (${formatNumber(r.bestCost)})`,
-                              badge: r.config.algorithm,
-                            })),
-                        ]}
-                      />
-                    </div>
-                    {compareRunId && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setCompareRunId("")}
-                        className="text-xs text-red-600 hover:bg-red-50"
-                      >
-                        Batal bandingkan
-                      </Button>
+
+                    {compareRun && compareRun.dataset.id !== run.dataset.id && (
+                      <div className="p-2 bg-amber-50 border border-amber-200 rounded text-amber-800 flex items-center gap-2">
+                        <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                        <span>
+                          <strong>Peringatan Kondisi:</strong> Run pembanding #
+                          {runs.length - runs.findIndex((x) => x.id === compareRun.id)} menggunakan
+                          dataset berbeda ({compareRun.dataset.name} vs {run.dataset.name}). Skala
+                          sumbu biaya tidak ekuivalen.
+                        </span>
+                      </div>
                     )}
+
+                    {compareRun &&
+                      compareRun.dataset.id === run.dataset.id &&
+                      !areRoutesIdentical(compareRun.initialRoute, run.initialRoute) && (
+                        <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-800 flex items-center gap-2">
+                          <Info size={14} className="text-blue-600 shrink-0" />
+                          <span>
+                            <strong>Catatan:</strong> Run pembanding #
+                            {runs.length - runs.findIndex((x) => x.id === compareRun.id)}{" "}
+                            menggunakan rute awal berbeda.
+                          </span>
+                        </div>
+                      )}
                   </div>
                 )}
 
@@ -857,6 +946,11 @@ export function ReportView({
               </div>
 
               <div className="panel">
+                <TraceReplayViewer
+                  run={run}
+                  selectedStep={selectedStep}
+                  onSelectStep={setSelectedStep}
+                />
                 <TraceTableComponent run={run} selected={selectedStep} onSelect={setSelectedStep} />
                 {selectedStep >= 0 && run.trace[selectedStep] && (
                   <TraceDetailsComponent step={run.trace[selectedStep]!} dataset={run.dataset} />
@@ -1016,6 +1110,317 @@ function CostConvergenceChart({
   );
 }
 
+function TraceReplayViewer({
+  run,
+  selectedStep,
+  onSelectStep,
+}: {
+  run: RunResult;
+  selectedStep: number;
+  onSelectStep: (step: number) => void;
+}) {
+  const hasTrace = run.trace.length > 0;
+  const isReplaying = selectedStep >= 0 && selectedStep < run.trace.length;
+  const activeIndex = isReplaying ? selectedStep : Math.max(0, run.trace.length - 1);
+  const step = run.trace[activeIndex];
+
+  const { current, candidate, best } = useMemo(
+    () =>
+      hasTrace
+        ? reconstruct(run, activeIndex)
+        : { current: run.bestRoute, candidate: null, best: run.bestRoute },
+    [hasTrace, run, activeIndex],
+  );
+
+  const nodes = run.dataset.nodes;
+  const { midX, midY, scale } = useMemo(() => {
+    const xs = nodes.map((n) => n.x);
+    const ys = nodes.map((n) => n.y);
+    const minX = xs.length ? Math.min(...xs) : -10;
+    const maxX = xs.length ? Math.max(...xs) : 10;
+    const minY = ys.length ? Math.min(...ys) : -10;
+    const maxY = ys.length ? Math.max(...ys) : 10;
+    const computedMidX = (minX + maxX) / 2;
+    const computedMidY = (minY + maxY) / 2;
+    const effectiveSpanX = Math.max(maxX - minX, 14);
+    const effectiveSpanY = Math.max(maxY - minY, 9);
+    const computedScale = Math.min(560 / effectiveSpanX, 240 / effectiveSpanY);
+    return { midX: computedMidX, midY: computedMidY, scale: computedScale };
+  }, [nodes]);
+
+  if (!hasTrace || !step) return null;
+
+  const project = (x: number, y: number) => ({
+    x: 300 + (x - midX) * scale,
+    y: 140 - (y - midY) * scale,
+  });
+
+  const getPathD = (route: Route) => {
+    if (route.length < 2) return "";
+    return (
+      route
+        .map((idx, i) => {
+          const node = nodes[idx];
+          if (!node) return "";
+          const p = project(node.x, node.y);
+          return `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+        })
+        .join(" ") + " Z"
+    );
+  };
+
+  const isAccepted = step.accepted;
+  const isAspiration = step.aspiration;
+  const isTabu = step.tabu;
+
+  return (
+    <div className="trace-replay-card">
+      <div className="trace-replay-header">
+        <div className="flex items-center gap-2">
+          <span className="eyebrow">REPLAY TRACE ITERASI</span>
+          <span className="replay-step-pill">
+            Iterasi #{step.iteration} dari {run.trace.length}
+          </span>
+          <span
+            className={`decision-badge px-2 py-0.5 rounded text-xs font-semibold border ${
+              isAspiration
+                ? "bg-purple-100 text-purple-800 border-purple-300"
+                : isAccepted
+                  ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                  : "bg-rose-100 text-rose-800 border-rose-300"
+            }`}
+          >
+            {isAspiration ? "Aspiration Diterima" : isAccepted ? "Diterima" : "Ditolak"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={activeIndex <= 0}
+            onClick={() => onSelectStep(0)}
+            title="Langkah Pertama"
+          >
+            <SkipBack size={13} />
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={activeIndex <= 0}
+            onClick={() => onSelectStep(Math.max(0, activeIndex - 1))}
+            title="Langkah Sebelumnya"
+          >
+            <ChevronLeft size={13} />
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={activeIndex >= run.trace.length - 1}
+            onClick={() => onSelectStep(Math.min(run.trace.length - 1, activeIndex + 1))}
+            title="Langkah Berikutnya"
+          >
+            <ChevronRight size={13} />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={activeIndex >= run.trace.length - 1}
+            onClick={() => onSelectStep(run.trace.length - 1)}
+            title="Langkah Terakhir"
+          >
+            <SkipForward size={13} />
+          </Button>
+          {isReplaying && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onSelectStep(-1)}
+              className="text-xs ml-1"
+              title="Kembali ke rute akhir"
+            >
+              <RotateCcw size={12} /> Keluar Replay
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="replay-slider-row">
+        <input
+          type="range"
+          min={0}
+          max={run.trace.length - 1}
+          value={activeIndex}
+          onChange={(e) => onSelectStep(Number(e.target.value))}
+          className="replay-slider"
+          aria-label="Pilih nomor iterasi"
+        />
+      </div>
+
+      <div className="replay-content-grid">
+        <div className="replay-canvas-wrapper">
+          <svg viewBox="0 0 600 280" className="replay-svg">
+            <defs>
+              <pattern id="replayGrid" width="30" height="30" patternUnits="userSpaceOnUse">
+                <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#f1f5f9" strokeWidth="1" />
+              </pattern>
+            </defs>
+            <rect width="600" height="280" fill="url(#replayGrid)" rx="8" />
+
+            {/* Layer 1: Initial Route */}
+            {run.initialRoute.length > 2 && (
+              <path
+                d={getPathD(run.initialRoute)}
+                fill="none"
+                stroke="#cbd5e1"
+                strokeWidth="1.5"
+                strokeDasharray="4 4"
+                opacity="0.8"
+              />
+            )}
+
+            {/* Layer 2: Current Route */}
+            {current.length > 2 && (
+              <path
+                d={getPathD(current)}
+                fill="none"
+                stroke="#0ea5e9"
+                strokeWidth="2.2"
+                strokeDasharray="6 4"
+                opacity="0.9"
+              />
+            )}
+
+            {/* Layer 3: Candidate Route */}
+            {candidate && candidate.length > 2 && (
+              <path
+                d={getPathD(candidate)}
+                fill="none"
+                stroke="#f59e0b"
+                strokeWidth="2.4"
+                strokeDasharray="4 4"
+                opacity="0.95"
+              />
+            )}
+
+            {/* Layer 4: Best-so-far Route */}
+            {best.length > 2 && (
+              <path
+                d={getPathD(best)}
+                fill="none"
+                stroke="#0d9488"
+                strokeWidth="2.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.9"
+              />
+            )}
+
+            {/* Layer 5: Nodes & IDs */}
+            {nodes.map((node) => {
+              const p = project(node.x, node.y);
+              const isStart = node.id === run.config.startId;
+              return (
+                <g key={node.id}>
+                  {isStart && (
+                    <circle
+                      cx={p.x}
+                      cy={p.y}
+                      r={14}
+                      fill="#ccfbf1"
+                      stroke="#0d9488"
+                      strokeWidth={1.5}
+                      opacity="0.6"
+                    />
+                  )}
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={isStart ? 9 : 7}
+                    fill={isStart ? "#14b8a6" : "#ffffff"}
+                    stroke={isStart ? "#0f766e" : "#334155"}
+                    strokeWidth={2}
+                  />
+                  <text
+                    x={p.x}
+                    y={p.y - 11}
+                    textAnchor="middle"
+                    className="text-[10px] font-semibold fill-slate-700 pointer-events-none"
+                  >
+                    {node.id}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+
+          <div className="replay-legend">
+            <span className="legend-item">
+              <span className="legend-line initial" /> Rute Awal
+            </span>
+            <span className="legend-item">
+              <span className="legend-line current" /> Current
+            </span>
+            <span className="legend-item">
+              <span className="legend-line candidate" /> Kandidat Move
+            </span>
+            <span className="legend-item">
+              <span className="legend-line best" /> Best-so-far
+            </span>
+          </div>
+        </div>
+
+        <div className="replay-info-panel">
+          <div className="metric-cell primary p-2.5">
+            <span className="metric-label">Jarak Kandidat (d_cand)</span>
+            <strong className="metric-value font-tabular">
+              {formatDistance(step.candidateCost)}
+            </strong>
+            <small className="metric-sub">
+              Δ = {step.delta > 0 ? "+" : ""}
+              {formatDistance(step.delta)} {run.dataset.unit}
+            </small>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+              <span className="text-slate-500 block">Current Tour:</span>
+              <strong className="font-tabular text-slate-800">
+                {formatDistance(step.currentCost)}
+              </strong>
+            </div>
+            <div className="p-2 bg-teal-50 border border-teal-200 rounded-lg">
+              <span className="text-teal-700 block">Best-so-far:</span>
+              <strong className="font-tabular text-teal-900">
+                {formatDistance(step.bestCost)}
+              </strong>
+            </div>
+          </div>
+
+          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1">
+            <div className="font-medium text-slate-700">Keputusan Iterasi:</div>
+            <p className="text-slate-600">{step.reason}</p>
+            {run.config.algorithm === "TS" ? (
+              <div className="text-[11px] text-slate-500 pt-1 border-t border-slate-200">
+                <span>
+                  Move 2-OPT ({step.move.i}, {step.move.j}) ·{" "}
+                </span>
+                <span>Tabu: {isTabu ? "Ya" : "Tidak"} · </span>
+                <span>Aspiration: {isAspiration ? "Ya" : "Tidak"}</span>
+              </div>
+            ) : (
+              <div className="text-[11px] text-slate-500 pt-1 border-t border-slate-200 font-mono">
+                <span>T = {formatNumber(step.temperature ?? 0)} · </span>
+                <span>P = {step.probability?.toFixed(6) ?? "—"} · </span>
+                <span>Draw = {step.draw?.toFixed(6) ?? "—"}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TraceTableComponent({
   run,
   selected,
@@ -1026,8 +1431,16 @@ function TraceTableComponent({
   onSelect: (index: number) => void;
 }) {
   const [page, setPage] = useState(0);
+  const [prevRunId, setPrevRunId] = useState(run.id);
+
+  if (prevRunId !== run.id) {
+    setPrevRunId(run.id);
+    setPage(0);
+  }
+
   const pageSize = 20;
   const totalPages = Math.max(1, Math.ceil(run.trace.length / pageSize));
+  const safePage = Math.min(page, Math.max(0, totalPages - 1));
 
   if (!run.trace.length) {
     return (
@@ -1059,16 +1472,16 @@ function TraceTableComponent({
             </tr>
           </thead>
           <tbody>
-            {run.trace.slice(page * pageSize, (page + 1) * pageSize).map((step, index) => (
+            {run.trace.slice(safePage * pageSize, (safePage + 1) * pageSize).map((step, index) => (
               <tr
                 key={step.iteration}
-                className={selected === page * pageSize + index ? "selected-row" : ""}
+                className={selected === safePage * pageSize + index ? "selected-row" : ""}
               >
                 <td>
                   <button
                     type="button"
                     className="step-button"
-                    onClick={() => onSelect(page * pageSize + index)}
+                    onClick={() => onSelect(safePage * pageSize + index)}
                   >
                     #{step.iteration}
                   </button>
@@ -1091,22 +1504,22 @@ function TraceTableComponent({
       </div>
       <div className="pagination">
         <span>
-          {run.trace.length.toLocaleString("id-ID")} langkah · halaman {page + 1}/{totalPages}
+          {run.trace.length.toLocaleString("id-ID")} langkah · halaman {safePage + 1}/{totalPages}
         </span>
         <div className="flex gap-2">
           <Button
             variant="ghost"
             size="sm"
-            disabled={page === 0}
-            onClick={() => setPage((v) => v - 1)}
+            disabled={safePage === 0}
+            onClick={() => setPage((v) => Math.max(0, v - 1))}
           >
             Sebelumnya
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            disabled={page + 1 >= totalPages}
-            onClick={() => setPage((v) => v + 1)}
+            disabled={safePage + 1 >= totalPages}
+            onClick={() => setPage((v) => Math.min(totalPages - 1, v + 1))}
           >
             Berikutnya
           </Button>

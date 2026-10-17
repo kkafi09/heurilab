@@ -16,14 +16,13 @@ HeuriLab adalah aplikasi pembelajaran berbasis web untuk optimasi Traveling Sale
 
 ## Fakta implementasi yang harus dipertahankan
 
-- Kondisi aplikasi saat ini: TS dan SA menggunakan neighborhood 2-OPT; pembentuk rute awal adalah Nearest Neighbor (NN) dan Nearest Insertion (NI), dengan opsi perbaikan 2-OPT.
-- Kebutuhan brief yang belum tersedia dan direncanakan untuk dikembangkan di aplikasi yang sama: Nearest Farthest Insertion (NFI) dan 3-OPT. Jangan menuliskannya sebagai fitur yang sudah dapat dipakai sebelum implementasi serta verifikasinya selesai.
+- Kondisi aplikasi saat ini: Pembentuk rute awal adalah Nearest Neighbor (NN), Nearest Insertion (NI), dan Nearest Farthest Insertion (NFI). Local search descent mendukung 2-OPT dan 3-OPT (tersedia sebagai kategori Local Search mandiri maupun opsi perbaikan solusi awal). TS dan SA menggunakan neighborhood 2-OPT.
 - Jarak menggunakan Euclidean planar dalam unit koordinat. Jangan menyebutnya jarak jalan nyata atau jarak geografis.
 - Fixture enam node di `data/example-six.json` adalah data sintetis untuk pembelajaran, bukan dataset resmi. Pada fixture itu, rute NN mulai A memiliki panjang 24.686074230319797 dan sudah optimal; perbaikan 0% pada fixture ini adalah hasil yang sah.
 - Impor dataset aplikasi saat ini menerima Excel `.xlsx`; jangan menjanjikan impor `.xls` atau `.csv`. CSV adalah format ekspor ringkasan perbandingan, sedangkan JSON mengekspor detail run.
 - TS memakai tabu tenure, tabu list, aspiration, kandidat eligible terbaik, dan best-so-far terpisah dari current solution.
 - SA memakai seed, suhu awal, cooling rate, iterasi per suhu, dan suhu minimum. Untuk dokumen proyek, tampilkan α sebagai notasi cooling rate SA yang dipakai kelompok. Jangan menambahkan kontrol λ sebelum makna, rumus, dan rentangnya didefinisikan.
-- 3-OPT direncanakan sebagai local search/baseline dan opsi perbaikan solusi awal. TS dan SA tetap memakai neighborhood 2-OPT kecuali brief atau keputusan kelompok berikutnya mengubah ruang lingkup secara eksplisit.
+- 3-OPT diimplementasikan sebagai local search descent dan opsi perbaikan solusi awal (mengevaluasi 7 rekoneksi non-identitas deterministik). TS dan SA tetap memakai neighborhood 2-OPT.
 - Tidak ada jaminan optimum global atau bahwa TS selalu mengalahkan SA. Hasil bergantung pada data, solusi awal, konfigurasi, dan seed.
 - Antarmuka menyediakan Panduan/Help. Dokumentasikan akses aplikasi dan panduan dengan langkah yang sesuai UI terbaru.
 

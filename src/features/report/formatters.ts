@@ -381,7 +381,7 @@ export function calculateReportKPIs(runs: RunResult[], reference: RunResult | nu
     };
   }
 
-  // 3. Durasi total terendah dalam kelompok sebanding
+  // 3. Durasi terendah dalam kelompok sebanding
   let fastestDuration: ReportKPIData["fastestDuration"] = null;
   if (comparableGroup.length < 2) {
     fastestDuration = {
@@ -391,24 +391,50 @@ export function calculateReportKPIs(runs: RunResult[], reference: RunResult | nu
       tied: false,
     };
   } else {
-    const validDurationRuns = comparableGroup.filter(
-      (r) => (r.durations?.totalMs ?? r.durationMs) >= 0,
+    const isMeta = reference.category === "metaheuristic";
+    // Untuk metaheuristik: metrik perbandingan utama antara TS-SA adalah waktu pencarian (searchMs)
+    // Untuk kategori lain: durasi total terukur (totalMs).
+    // Run legacy tanpa durations.totalMs tidak boleh memenangkan KPI total saat ada run dengan total terukur.
+    const hasMeasuredTotals = comparableGroup.some(
+      (r) => r.durations && typeof r.durations.totalMs === "number" && r.durations.totalMs >= 0,
     );
+
+    const validDurationRuns = comparableGroup.filter((r) => {
+      if (isMeta) {
+        const ms = r.durations?.searchMs ?? r.durationMs;
+        return typeof ms === "number" && Number.isFinite(ms) && ms >= 0;
+      }
+      if (hasMeasuredTotals) {
+        return r.durations && typeof r.durations.totalMs === "number" && r.durations.totalMs >= 0;
+      }
+      return typeof r.durationMs === "number" && Number.isFinite(r.durationMs) && r.durationMs >= 0;
+    });
+
     if (validDurationRuns.length < 2) {
       fastestDuration = {
         valueFormatted: "—",
-        subLabel: "Durasi fase tidak lengkap",
+        subLabel: isMeta
+          ? "Perlu minimal 2 hasil sebanding"
+          : hasMeasuredTotals
+            ? "Perlu minimal 2 hasil dengan durasi total terukur"
+            : "Durasi fase tidak lengkap",
         sampleCount: validDurationRuns.length,
         tied: false,
       };
     } else {
+      const getMs = (r: RunResult) => {
+        if (isMeta) return r.durations?.searchMs ?? r.durationMs;
+        if (hasMeasuredTotals) return r.durations!.totalMs;
+        return r.durationMs;
+      };
+
       let minMs = Infinity;
       for (const r of validDurationRuns) {
-        const ms = r.durations?.totalMs ?? r.durationMs;
+        const ms = getMs(r);
         if (ms < minMs) minMs = ms;
       }
       const tiedDurations = validDurationRuns.filter((r) => {
-        const ms = r.durations?.totalMs ?? r.durationMs;
+        const ms = getMs(r);
         return Math.abs(ms - minMs) < 0.1;
       });
 
@@ -417,7 +443,9 @@ export function calculateReportKPIs(runs: RunResult[], reference: RunResult | nu
         subLabel:
           tiedDurations.length > 1
             ? `Setara pada ${tiedDurations.length} run sebanding`
-            : `Durasi terendah dari ${validDurationRuns.length} run sebanding`,
+            : isMeta
+              ? `Pencarian terendah dari ${validDurationRuns.length} run sebanding`
+              : `Durasi total terendah dari ${validDurationRuns.length} run sebanding`,
         sampleCount: validDurationRuns.length,
         tied: tiedDurations.length > 1,
       };

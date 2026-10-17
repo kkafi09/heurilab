@@ -302,7 +302,7 @@ export function InteractiveCanvas({
           )}
 
           {/* Layer 2: Current / Worker Progress Route (Dashed Blue) */}
-          {current.length > 2 && phase !== "idle" && (
+          {current.length > 2 && (phase !== "idle" || !!candidate || current !== best) && (
             <path
               d={getPathD(current)}
               fill="none"

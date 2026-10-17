@@ -1,5 +1,10 @@
 import { validateDataset, validateRoute, type Dataset } from "../domain/tsp/model";
-import { validateConfig, type RunConfig, type RunResult } from "../domain/algorithms/experiment";
+import {
+  validateConfig,
+  type RunConfig,
+  type RunResult,
+  type StageDurations,
+} from "../domain/algorithms/experiment";
 import { twoOptMoves } from "../domain/algorithms/baselines";
 export interface SavedSession {
   version: 2;
@@ -142,6 +147,23 @@ export function parseSession(value: unknown): SavedSession {
       throw new Error("Trace tersimpan tidak valid.");
 
     if (runCategory === "metaheuristic") {
+      // Legacy migration: jika status cancelled, trace kosong, tetapi iterations > 0 dan ada preparationMs
+      // ini berasal dari pola lama di mana langkah persiapan local search disimpan ke iterations.
+      if (
+        item.status === "cancelled" &&
+        Array.isArray(item.trace) &&
+        item.trace.length === 0 &&
+        typeof item.iterations === "number" &&
+        item.iterations > 0 &&
+        record(item.durations) &&
+        typeof item.durations.preparationMs === "number"
+      ) {
+        (item as Record<string, unknown>).preparationSteps = item.iterations;
+        (item as Record<string, unknown>).cancelledStage = "preparation";
+        (item as Record<string, unknown>).iterations = 0;
+        (item as Record<string, unknown>).evaluations = 0;
+      }
+
       if (item.trace.length !== item.iterations) throw new Error("Trace tersimpan tidak valid.");
       const moves = new Set(twoOptMoves(size).map((move) => `${move.i}:${move.j}`));
       if (
@@ -161,11 +183,31 @@ export function parseSession(value: unknown): SavedSession {
         throw new Error("Isi trace tersimpan tidak valid.");
     }
 
+    let validatedDurations: StageDurations | undefined = undefined;
+    if (item.durations !== undefined && item.durations !== null) {
+      if (!record(item.durations)) throw new Error("Durasi fase tidak valid.");
+      const { constructionMs, preparationMs, searchMs, totalMs } = item.durations;
+      if (typeof totalMs !== "number" || !Number.isFinite(totalMs) || totalMs < 0) {
+        throw new Error("Durasi total tidak valid.");
+      }
+      for (const [key, val] of Object.entries({ constructionMs, preparationMs, searchMs })) {
+        if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val) || val < 0)) {
+          throw new Error(`Durasi fase ${key} tidak valid.`);
+        }
+      }
+      validatedDurations = {
+        constructionMs: typeof constructionMs === "number" ? constructionMs : undefined,
+        preparationMs: typeof preparationMs === "number" ? preparationMs : undefined,
+        searchMs: typeof searchMs === "number" ? searchMs : undefined,
+        totalMs,
+      };
+    }
+
     migratedRuns.push({
       ...(item as unknown as RunResult),
       category: runCategory,
       config: runConfig,
-      durations: item.durations as RunResult["durations"],
+      durations: validatedDurations,
     });
   }
 

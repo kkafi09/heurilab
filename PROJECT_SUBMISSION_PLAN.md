@@ -16,12 +16,11 @@ Siapkan satu paket yang konsisten dan dapat diperiksa, terdiri dari:
 ## 2. Kondisi aplikasi dan keputusan isi
 
 - HeuriLab web yang sekarang tetap menjadi aplikasi utama; pengembangan dilakukan pada aplikasi/repository yang sama, bukan membuat aplikasi baru.
-- Fitur yang sudah tersedia: Tabu Search dan Simulated Annealing dengan neighborhood 2-OPT; Nearest Neighbor dan Nearest Insertion untuk rute awal; opsi perbaikan 2-OPT; visualisasi dan trace eksperimen; perbandingan run TS/SA.
-- Kebutuhan brief yang belum tersedia: Nearest Farthest Insertion (NFI) dan 3-OPT. Tambahkan ke aplikasi yang sama sebelum menyebutnya sebagai fitur demo atau hasil implementasi.
+- Fitur yang tersedia: Tabu Search dan Simulated Annealing dengan neighborhood 2-OPT; Nearest Neighbor (NN), Nearest Insertion (NI), dan Nearest Farthest Insertion (NFI) untuk rute awal; Local Search 2-OPT dan 3-OPT (sebagai kategori tersendiri maupun opsi perbaikan awal); visualisasi replay trace eksperimen; perbandingan beracuan run antarkategori.
 - Fokus penjelasan dan perbandingan utama tetap TS vs SA. NN, NI, NFI, 2-OPT, dan 3-OPT berperan sebagai pembentuk solusi awal atau baseline/local search.
 - Gunakan satu dataset dan satu solusi awal yang sama untuk perhitungan manual, eksperimen aplikasi, tabel hasil, dan PPT.
 - Fixture enam titik yang sudah ada bersifat sintetis. Jika dosen/kelompok memiliki dataset resmi, ganti secara konsisten pada semua artefak dan simpan sumber datanya; jika tidak, beri label jelas sebagai contoh sintetis.
-- Setelah NFI dan 3-OPT diimplementasikan, perbandingan metode mencakup baseline/konstruksi, local search, TS, dan SA dengan data yang sama. Untuk TS vs SA, samakan rute awal serta anggaran iterasi dan catat seluruh parameternya. TS/SA tetap memakai neighborhood 2-OPT.
+- Perbandingan metode mencakup baseline/konstruksi, local search, TS, dan SA dengan data yang sama. Untuk TS vs SA, samakan rute awal serta anggaran iterasi dan catat seluruh parameternya. TS/SA tetap memakai neighborhood 2-OPT.
 - Cocokkan laporan lama dengan keadaan aplikasi. Saat ini jarak menggunakan Euclidean planar, impor menerima `.xlsx`, ekspor run memakai JSON, dan ekspor ringkasan perbandingan memakai CSV. Hindari klaim `.xls`/CSV sebagai format impor atau fitur yang belum tersedia.
 - Pada dokumen dan antarmuka, tampilkan α sebagai cooling rate SA. Jangan menambahkan parameter λ sampai kelompok menetapkan definisi, rumus, serta rentangnya.
 - Catat konfigurasi eksperimen, termasuk rute awal, tenure TS, dan parameter/seed SA. Jangan menyimpulkan satu metode selalu lebih baik dari satu contoh.

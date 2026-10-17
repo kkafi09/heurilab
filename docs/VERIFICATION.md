@@ -12,7 +12,7 @@ Browser: Google Chrome dan Microsoft Edge.
 | Oxfmt format check                          | Lulus (`bun run format:check`)                                             |
 | Oxlint dengan deny-warnings                 | Lulus, tanpa warning/error kode (`bun run lint`)                           |
 | TypeScript strict                           | Lulus (`tsc -b`)                                                           |
-| Pengujian domain/engine/adapter melalui Bun | 29 lulus, 0 gagal; 5.503 assertions (`bun run test`)                       |
+| Pengujian domain/engine/adapter melalui Bun | 33 lulus, 0 gagal; 5.522 assertions (`bun run test`)                       |
 | Build produksi Vite                         | Lulus (`vite build`)                                                       |
 | Playwright pada build produksi              | 16 lulus, 0 gagal: 8 skenario di Google Chrome dan Microsoft Edge          |
 | Screenshot desktop & mobile                 | Ditinjau; layout 1366×768, 768×1024, dan 390×844                           |
@@ -29,14 +29,25 @@ Perintah yang dijalankan: `bun run check` dan `bun run test:e2e`.
 - **4 Kartu KPI Ilmiah Berorientasi Acuan:**
   1. _Jarak terendah pada dataset acuan:_ Nilai terbaik pada dataset yang sama, dilengkapi deteksi tie-break (`Seri · N hasil (Metode A, Metode B)`).
   2. _Rata-rata perbaikan kelompok sebanding:_ Rata-rata persentase perbaikan pada kelompok metode yang sebanding (dataset sama, rute awal identik, dan iterasi sama untuk metaheuristik).
-  3. _Durasi total terendah dalam kelompok:_ Komputasi tersingkat di antara run yang sebanding.
+  3. _Durasi komputasi terendah:_ Komputasi tersingkat di antara run yang sebanding dengan prioritas `searchMs` untuk perbandingan adil metaheuristik TS vs SA (mengeliminasi bias waktu konstruksi/perbaikan awal), serta mengecualikan run legacy tanpa durasi bertahap terukur dari penentuan pemenang total duration.
   4. _Total eksperimen:_ Jumlah seluruh run dalam riwayat sesi.
 - **Tipografi Tabular & Skala Angka:** Angka KPI berukuran 26px font UI reguler dengan `tabular-nums` agar konsisten, rapi, dan mudah dibaca tanpa font monospace yang terlalu lebar.
+
+### Penyelesaian Gap & Refinement HeuriLab (G1–G8)
+
+1. **G1 — Konsistensi Ekspor CSV:** `total_duration_ms` bersumber dari `durations.totalMs` (run legacy tanpa durasi bertahap terukur diekspor kosong `""`, bukan `durationMs`), `improvement_percent` untuk metode konstruksi diekspor kosong `""`, dan `search_time_ms` mengekspor `durations.searchMs`.
+2. **G2 — Fairness KPI Durasi Metaheuristik:** KPI durasi memprioritaskan `searchMs` saat membandingkan metaheuristik dengan rute awal identik. Run legacy tanpa durasi terukur diecualikan dari penentuan pemenang durasi total, dan deteksi tie sub-milidetik (< 0.1 ms) diterapkan.
+3. **G3 — Resiliensi Pembatalan Tahap Persiapan & Migrasi Sesi:** Pembatalan pada tahap persiapan mencatat `cancelledStage: "preparation"`, `iterations: 0`, `evaluations: 0`, `preparationSteps`, dan `preparationEvaluations`. Parser sesi memvalidasi durasi non-negatif dan memigrasikan run cancel legacy v2 secara otomatis.
+4. **G4 — Interactive Trace Replay Viewer:** Dilengkapi kontrol interaktif (Slider, First, Prev, Next, Last, Exit Replay), peta visual SVG multi-layer (Initial, Current, Candidate, Best, Nodes), delta cost ($\Delta = d_{\text{cand}} - d_{\text{curr}}$), metrik keputusan TS/SA, dan status visual terkini. Kanvas Playground juga menampilkan rute Current selama fase aktif atau saat berbeda dari Best.
+5. **G5 — Representasi Node ID Konsisten:** Seluruh representasi rute di ReportView (konstruksi, perbaikan awal, local search, dan metaheuristik) menggunakan Node ID format tertutup (`closedRoute(..., dataset)`).
+6. **G6 — Pembatasan & Penanda Perbandingan Kurva:** Penomoran run stabil (`runs.length - runs.findIndex(...)`), penanda sebanding/beda rute/beda dataset, banner peringatan visual jika membandingkan kurva lintas dataset atau rute awal berbeda, serta auto-reset step replay dan pembersihan pagination pada pergantian run.
+7. **G7 — Validasi Konfigurasi Terarah:** Validasi parameter SA (`seed`, `initialTemperature`, `coolingRate`, `iterationsPerTemperature`, `minimumTemperature`) hanya dieksekusi jika algoritma yang dipilih adalah SA. Draf SA kosong tidak memblokir eksekusi TS.
+8. **G8 — Harmonisasi Spesifikasi & Status 3-OPT:** Dokumen dan kode diselaraskan: NFI dan 3-OPT berstatus terimplementasi dan terverifikasi penuh; evaluasi 3-OPT mendokumentasikan 7 rekoneksi non-identitas valid (3 kasus 2-opt + 4 kasus 3-opt murni).
 
 ### Cakupan Domain Tambahan (17 Oktober 2026)
 
 - **Nearest Farthest Insertion (NFI):** Mulai dari node awal dan node terdekat, memilih node di luar tour dengan jarak minimum-ke-tour terbesar, menyisipkan pada sisi dengan delta kenaikan minimum, tie-break deterministik ID dan posisi sisi.
-- **3-OPT Local Search:** Evaluasi triple sisi tidak bersebelahan $(i, j, k)$, 4 rekoneksi valid pembentuk siklus tunggal, perbaikan biaya terbaik (`best improvement`) dengan toleransi $\varepsilon = 10^{-9}$, deterministik, dan penanganan dataset kecil ($N < 6$) tanpa kandidat valid.
+- **3-OPT Local Search:** Evaluasi triple sisi tidak bersebelahan $(i, j, k)$, 7 rekoneksi non-identitas valid (3 kasus 2-opt + 4 kasus rekoneksi murni 3-opt) pembentuk siklus tunggal, perbaikan biaya terbaik (`best improvement`) dengan toleransi $\varepsilon = 10^{-9}$, deterministik, dan penanganan dataset kecil ($N < 6$) tanpa kandidat valid.
 - **Durasi Bertahap (Stage Durations):** Pemisahan waktu milidetik tahap konstruksi, perbaikan awal (2-OPT/3-OPT), dan pencarian metaheuristik, serta total waktu.
 - **Migrasi Sesi v1 ke v2:** Kompatibilitas mundur format sesi IndexedDB; konversi `improve: true -> "2OPT"` dan `false -> "none"` serta pemeliharaan seluruh riwayat 10 run dan trace lama.
 - **Ekspor CSV & JSON:** CSV memuat kolom kategori, metode awal/perbaikan, parameter lengkap ($\alpha, T_{\min}$, seed), durasi bertahap, status, dan rute; JSON memuat snapshot detail run.

@@ -149,12 +149,12 @@ describe("data dan biaya", () => {
     for (const patch of [
       { maxIterations: 0 },
       { maxIterations: 10001 },
-      { seed: -1 },
-      { coolingRate: 1 },
+      { seed: -1, algorithm: "SA" as const },
+      { coolingRate: 1, algorithm: "SA" as const },
       { tenure: 0 },
       { startId: "absent" },
-      { initialTemperature: Infinity },
-      { minimumTemperature: 100 },
+      { initialTemperature: Infinity, algorithm: "SA" as const },
+      { minimumTemperature: 100, algorithm: "SA" as const },
     ])
       expect(validateConfig({ ...defaultConfig, ...patch }, EXAMPLE).length).toBeGreaterThan(0);
   });
@@ -727,5 +727,145 @@ describe("formatter dan logika perbandingan laporan", () => {
     expect(singleKpis.avgImprovement!.valueFormatted).toBe("—");
     expect(singleKpis.avgImprovement!.subLabel).toContain("Perlu minimal 2");
     expect(singleKpis.fastestDuration!.valueFormatted).toBe("—");
+  });
+
+  test("validateConfig memisahkan parameter khusus TS dan SA", () => {
+    const cfgTS: RunConfig = {
+      ...defaultConfig,
+      algorithm: "TS",
+      initialTemperature: -99, // invalid SA parameter
+      coolingRate: 2.5, // invalid SA parameter
+      seed: -1, // invalid SA parameter
+    };
+    // Karena algoritma TS, parameter SA tidak boleh menggagalkan validasi
+    expect(validateConfig(cfgTS, EXAMPLE)).toEqual([]);
+
+    // Namun ketika beralih ke SA, parameter SA tersebut wajib ditolak
+    const cfgSA: RunConfig = {
+      ...cfgTS,
+      algorithm: "SA",
+    };
+    const saErrors = validateConfig(cfgSA, EXAMPLE);
+    expect(saErrors.length).toBeGreaterThan(0);
+  });
+
+  test("parseSession memulihkan run cancel persiapan dan memigrasi pola legacy v2", () => {
+    const run = execute();
+    const cancelPrepRun = {
+      ...run,
+      iterations: 0,
+      evaluations: 0,
+      trace: [],
+      preparationSteps: 5,
+      cancelledStage: "preparation" as const,
+      status: "cancelled" as const,
+      stopReason: "cancelled" as const,
+      durations: { constructionMs: 2, preparationMs: 10, totalMs: 12 },
+    };
+    const session = {
+      version: 2 as const,
+      dataset: EXAMPLE,
+      config: defaultConfig,
+      runs: [cancelPrepRun],
+    };
+    const parsed = parseSession(session);
+    expect(parsed.runs[0]!.iterations).toBe(0);
+    expect(parsed.runs[0]!.status).toBe("cancelled");
+    expect(parsed.runs[0]!.durations?.totalMs).toBe(12);
+
+    // Legacy v2: cancel prep dengan iterations=5 tapi trace=[]
+    const legacyCancelRun = {
+      ...run,
+      iterations: 5,
+      trace: [],
+      status: "cancelled" as const,
+      stopReason: "cancelled" as const,
+      durations: { constructionMs: 2, preparationMs: 10, totalMs: 12 },
+    };
+    const legacySession = {
+      version: 2 as const,
+      dataset: EXAMPLE,
+      config: defaultConfig,
+      runs: [legacyCancelRun],
+    };
+    const parsedLegacy = parseSession(legacySession);
+    expect(parsedLegacy.runs[0]!.iterations).toBe(0);
+    expect(parsedLegacy.runs[0]!.preparationSteps).toBe(5);
+    expect(parsedLegacy.runs[0]!.cancelledStage).toBe("preparation");
+
+    // Durasi invalid (negatif) ditolak
+    const invalidDurSession = {
+      version: 2 as const,
+      dataset: EXAMPLE,
+      config: defaultConfig,
+      runs: [{ ...run, durations: { totalMs: -5 } }],
+    };
+    expect(() => parseSession(invalidDurSession)).toThrow("Durasi total tidak valid.");
+  });
+
+  test("comparisonCsv mengekspor durasi total dari durations.totalMs dan mengosongkan perbaikan konstruksi", () => {
+    const run = execute();
+    run.durations = { constructionMs: 2, preparationMs: 3, searchMs: 15, totalMs: 20 };
+    run.durationMs = 15;
+    const runConstruction = {
+      ...run,
+      id: "run-c",
+      category: "construction" as const,
+      durations: { constructionMs: 2, totalMs: 2 },
+    };
+    const runLegacy = {
+      ...run,
+      id: "run-legacy",
+      durations: undefined,
+      durationMs: 1,
+    };
+
+    const csv = comparisonCsv([run, runConstruction, runLegacy]);
+    const lines = csv.split("\r\n");
+    // Baris 1: run normal -> totalMs = 20, searchMs = 15
+    expect(lines[1]).toContain('"20"');
+    expect(lines[1]).toContain('"15"');
+
+    // Baris 2: konstruksi -> improvement_percent kosong ("")
+    const cellsC = lines[2]!.split(",");
+    // Kolom ke-15 adalah improvement_percent (0-indexed: index 14)
+    expect(cellsC[14]).toBe('""');
+
+    // Baris 3: legacy -> totalMs kosong ("") dan searchMs memakai durationMs ("1")
+    const cellsLegacy = lines[3]!.split(",");
+    // total_duration_ms adalah kolom index 20
+    expect(cellsLegacy[20]).toBe('""');
+    expect(cellsLegacy[19]).toBe('"1"');
+  });
+
+  test("calculateReportKPIs mengecualikan run legacy tanpa breakdown dari pemenang KPI total", () => {
+    const runModern = {
+      ...execute({ algorithm: "2OPT", category: "local-search" as const }),
+      id: "run-modern",
+      durations: { constructionMs: 2, preparationMs: 3, searchMs: 15, totalMs: 20 },
+    };
+    const runLegacy = {
+      ...execute({ algorithm: "2OPT", category: "local-search" as const }),
+      id: "run-legacy",
+      durations: undefined,
+      durationMs: 1, // legacy search-only duration
+      initialRoute: [...runModern.initialRoute],
+    };
+    const kpis = calculateReportKPIs([runModern, runLegacy], runModern);
+    // Legacy 1ms tanpa totalMs terukur tidak boleh memenangkan KPI total
+    expect(kpis.fastestDuration?.valueFormatted).not.toBe("1 ms");
+    expect(kpis.fastestDuration?.valueFormatted).toBe("—");
+    expect(kpis.fastestDuration?.subLabel).toContain("Perlu minimal 2");
+
+    // Jika ada 2 run modern dan 1 legacy, run modern 20ms menang, bukan legacy 1ms
+    const runModern2 = {
+      ...execute({ algorithm: "2OPT", category: "local-search" as const }),
+      id: "run-modern-2",
+      durations: { constructionMs: 2, preparationMs: 3, searchMs: 20, totalMs: 25 },
+      initialRoute: [...runModern.initialRoute],
+    };
+    const kpis3 = calculateReportKPIs([runModern, runModern2, runLegacy], runModern);
+    expect(kpis3.fastestDuration?.valueFormatted).not.toBe("1 ms");
+    expect(kpis3.fastestDuration?.valueFormatted).toBe("20 ms");
   });
 });

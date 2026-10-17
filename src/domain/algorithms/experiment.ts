@@ -112,6 +112,10 @@ export interface RunResult {
   durations?: StageDurations;
   status: "completed" | "cancelled";
   stopReason: StopReason;
+  cancelledStage?: "construction" | "preparation" | "search";
+  preparationSteps?: number;
+  preparationEvaluations?: number;
+  initialRouteSource?: "computed" | "snapshot";
 }
 
 export interface RunInput {
@@ -121,6 +125,7 @@ export interface RunInput {
   config: RunConfig;
   initialRoute?: Route;
   durations?: StageDurations;
+  initialRouteSource?: "computed" | "snapshot";
 }
 
 export function validateConfig(config: RunConfig, dataset: Dataset): string[] {
@@ -157,32 +162,34 @@ export function validateConfig(config: RunConfig, dataset: Dataset): string[] {
         errors.push("Tabu tenure harus 1–100.");
       }
     }
-    if (!Number.isInteger(config.seed) || config.seed < 0 || config.seed > 4294967295) {
-      errors.push("Seed harus integer 0–4.294.967.295.");
-    }
-    if (!Number.isFinite(config.initialTemperature) || config.initialTemperature <= 0) {
-      errors.push("Suhu awal harus positif dan finite.");
-    }
-    if (
-      !Number.isFinite(config.coolingRate) ||
-      config.coolingRate <= 0 ||
-      config.coolingRate >= 1
-    ) {
-      errors.push("Cooling rate harus lebih dari 0 dan kurang dari 1.");
-    }
-    if (
-      !Number.isInteger(config.iterationsPerTemperature) ||
-      config.iterationsPerTemperature < 1 ||
-      config.iterationsPerTemperature > 10000
-    ) {
-      errors.push("Iterasi per suhu harus 1–10.000.");
-    }
-    if (
-      !Number.isFinite(config.minimumTemperature) ||
-      config.minimumTemperature <= 0 ||
-      config.minimumTemperature >= config.initialTemperature
-    ) {
-      errors.push("Suhu minimum harus positif dan lebih kecil dari suhu awal.");
+    if (config.algorithm === "SA") {
+      if (!Number.isInteger(config.seed) || config.seed < 0 || config.seed > 4294967295) {
+        errors.push("Seed harus integer 0–4.294.967.295.");
+      }
+      if (!Number.isFinite(config.initialTemperature) || config.initialTemperature <= 0) {
+        errors.push("Suhu awal harus positif dan finite.");
+      }
+      if (
+        !Number.isFinite(config.coolingRate) ||
+        config.coolingRate <= 0 ||
+        config.coolingRate >= 1
+      ) {
+        errors.push("Cooling rate harus lebih dari 0 dan kurang dari 1.");
+      }
+      if (
+        !Number.isInteger(config.iterationsPerTemperature) ||
+        config.iterationsPerTemperature < 1 ||
+        config.iterationsPerTemperature > 10000
+      ) {
+        errors.push("Iterasi per suhu harus 1–10.000.");
+      }
+      if (
+        !Number.isFinite(config.minimumTemperature) ||
+        config.minimumTemperature <= 0 ||
+        config.minimumTemperature >= config.initialTemperature
+      ) {
+        errors.push("Suhu minimum harus positif dan lebih kecil dari suhu awal.");
+      }
     }
   } else if (category === "local-search") {
     if (!["2OPT", "3OPT"].includes(config.algorithm)) {

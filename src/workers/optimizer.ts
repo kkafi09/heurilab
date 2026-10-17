@@ -369,6 +369,7 @@ function tick() {
       if (engine.done) {
         const searchMs = elapsed();
         engine.result.durationMs = searchMs;
+        engine.result.initialRouteSource = activeInput?.initialRoute ? "snapshot" : "computed";
         engine.result.durations = {
           constructionMs,
           preparationMs,
@@ -614,8 +615,12 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
         bestRoute: lsBestRoute,
         bestCost: lsBestCost,
         trace: [],
-        iterations: lsSteps,
-        evaluations: lsEvaluations,
+        iterations: 0,
+        evaluations: 0,
+        preparationSteps: lsSteps,
+        preparationEvaluations: lsEvaluations,
+        cancelledStage: "preparation",
+        initialRouteSource: activeInput?.initialRoute ? "snapshot" : "computed",
         durationMs: dur,
         durations: {
           constructionMs,
@@ -649,6 +654,7 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
         trace: [],
         iterations: lsSteps,
         evaluations: lsEvaluations,
+        cancelledStage: "search",
         durationMs: dur,
         durations: {
           constructionMs,
@@ -667,6 +673,8 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
       engine.stop("cancelled");
       const searchMs = elapsed();
       engine.result.durationMs = searchMs;
+      engine.result.cancelledStage = "search";
+      engine.result.initialRouteSource = activeInput?.initialRoute ? "snapshot" : "computed";
       engine.result.durations = {
         constructionMs,
         preparationMs,
