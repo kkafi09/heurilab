@@ -7,18 +7,31 @@ Browser: Google Chrome dan Microsoft Edge.
 
 ### Hasil Akhir Pemeriksaan
 
-| Pemeriksaan                                 | Hasil                                                                    |
-| ------------------------------------------- | ------------------------------------------------------------------------ |
-| Oxfmt format check                          | Lulus (`bun run format:check`)                                           |
-| Oxlint dengan deny-warnings                 | Lulus, tanpa warning/error kode (`bun run lint`)                         |
-| TypeScript strict                           | Lulus (`tsc -b`)                                                         |
-| Pengujian domain/engine/adapter melalui Bun | 24 lulus, 0 gagal; 5.485 assertions (`bun run test`)                     |
-| Build produksi Vite                         | Lulus (`vite build`)                                                     |
-| Playwright pada build produksi              | 16 lulus, 0 gagal: 8 skenario di Google Chrome dan Microsoft Edge        |
-| Screenshot desktop & mobile                 | Ditinjau; layout 1366×768, 768×1024, dan 390×844                         |
-| Aksesibilitas modal Panduan                 | Focus trap, ARIA dialog, tab keyboard, Escape, scroll lock terverifikasi |
+| Pemeriksaan                                 | Hasil                                                                      |
+| ------------------------------------------- | -------------------------------------------------------------------------- |
+| Oxfmt format check                          | Lulus (`bun run format:check`)                                             |
+| Oxlint dengan deny-warnings                 | Lulus, tanpa warning/error kode (`bun run lint`)                           |
+| TypeScript strict                           | Lulus (`tsc -b`)                                                           |
+| Pengujian domain/engine/adapter melalui Bun | 29 lulus, 0 gagal; 5.503 assertions (`bun run test`)                       |
+| Build produksi Vite                         | Lulus (`vite build`)                                                       |
+| Playwright pada build produksi              | 16 lulus, 0 gagal: 8 skenario di Google Chrome dan Microsoft Edge          |
+| Screenshot desktop & mobile                 | Ditinjau; layout 1366×768, 768×1024, dan 390×844                           |
+| Aksesibilitas modal Panduan & Riwayat       | Focus trap, tombol terpisah tanpa nested button, ARIA dialog terverifikasi |
 
 Perintah yang dijalankan: `bun run check` dan `bun run test:e2e`.
+
+### Cakupan UI Polish & Pembaruan Sistem Evaluasi Laporan (17 Oktober 2026)
+
+- **Format Terpusat & Standar Indonesia:** Jarak format 3 desimal locale `id-ID` (`formatDistance`), perbaikan format 2 desimal (`formatPercent`), durasi presisi bertingkat ms/s (`formatDuration`), serta ringkasan durasi bertahap (`formatStageBreakdown`).
+- **Pembersihan Riwayat Playground (`ControlHub`):** Menghilangkan button bersarang (nested button) dengan memisahkan tombol utama pemilihan run dan tombol hapus ikon sebagai elemen saudara (sibling elements); label `Ditampilkan di kanvas` hanya aktif pada run kanvas; perbaikan `0,00%` berstatus netral tanpa coret atau panah hijau misleading.
+- **Header & Navigasi Tab Laporan (`ReportView`):** Judul `"Laporan eksperimen"`, toolbar aksi kanan (Ekspor JSON `#ID`, Ekspor CSV, Hapus riwayat), tab diringkas menjadi tiga: `"Perbandingan"`, `"Detail & Trace"`, dan `"Matriks jarak"`.
+- **Evaluasi Perbandingan Beracuan (Reference-based Evaluation):** Run aktif/terpilih berfungsi sebagai acuan pembanding. Header tabel menampilkan callout acuan (`Acuan: #ID — Nama Metode`). Evaluasi kondisi membedakan status `Sebanding`, `Dataset berbeda`, `Rute awal berbeda`, dan `Batas iterasi berbeda`.
+- **4 Kartu KPI Ilmiah Berorientasi Acuan:**
+  1. _Jarak terendah pada dataset acuan:_ Nilai terbaik pada dataset yang sama, dilengkapi deteksi tie-break (`Seri · N hasil (Metode A, Metode B)`).
+  2. _Rata-rata perbaikan kelompok sebanding:_ Rata-rata persentase perbaikan pada kelompok metode yang sebanding (dataset sama, rute awal identik, dan iterasi sama untuk metaheuristik).
+  3. _Durasi total terendah dalam kelompok:_ Komputasi tersingkat di antara run yang sebanding.
+  4. _Total eksperimen:_ Jumlah seluruh run dalam riwayat sesi.
+- **Tipografi Tabular & Skala Angka:** Angka KPI berukuran 26px font UI reguler dengan `tabular-nums` agar konsisten, rapi, dan mudah dibaca tanpa font monospace yang terlalu lebar.
 
 ### Cakupan Domain Tambahan (17 Oktober 2026)
 

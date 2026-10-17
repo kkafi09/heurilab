@@ -8,6 +8,7 @@ import {
   type Route,
   type DistanceMatrix,
 } from "../tsp/model";
+export { EPSILON };
 import {
   applyMove,
   moveDelta,

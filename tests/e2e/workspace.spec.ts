@@ -50,16 +50,17 @@ test("alur TS → Report Leaderboard → SA → perbandingan CSV & JSON → refr
 
   // 2. Buka Report View melalui view switcher di header
   await page.getByRole("button", { name: /Report/ }).click();
-  await expect(page.getByText("LEADERBOARD PERFORMA")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Perbandingan hasil" })).toBeVisible();
+  await expect(page.getByText(/Acuan:/)).toBeVisible();
   await expect(page.getByRole("cell", { name: /Tabu Search/ })).toBeVisible();
 
   // 3. Tab Detail & Trace
-  await page.getByRole("button", { name: /Analisis Detail & Trace/ }).click();
+  await page.getByRole("button", { name: "Detail & Trace" }).click();
   await expect(page.getByText("Iterasi 0")).toBeVisible();
 
   // 4. Ekspor JSON Run
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Ekspor JSON Run Ini" }).click();
+  await page.getByRole("button", { name: /Ekspor JSON/ }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/heurilab-TS.*json/);
   const json = JSON.parse(await readFile((await download.path())!, "utf8")) as {
@@ -80,7 +81,7 @@ test("alur TS → Report Leaderboard → SA → perbandingan CSV & JSON → refr
 
   // 6. Buka Report dan periksa ekspor CSV
   await page.getByRole("button", { name: /Report/ }).click();
-  await page.getByRole("button", { name: "Tabel Perbandingan Leaderboard" }).click();
+  await page.getByRole("button", { name: "Perbandingan" }).click();
   await expect(page.getByRole("cell", { name: /Simulated Annealing/ })).toBeVisible();
   await expect(page.getByRole("cell", { name: /Tabu Search/ })).toBeVisible();
 

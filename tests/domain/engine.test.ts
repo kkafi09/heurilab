@@ -40,6 +40,16 @@ import * as XLSX from "xlsx";
 import { parseSession } from "../../src/services/storage";
 import { comparisonCsv } from "../../src/services/export";
 import { workspaceReducer, type Workspace } from "../../src/app/workspace";
+import {
+  formatDistance,
+  formatPercent,
+  formatDuration,
+  formatStageBreakdown,
+  getMethodDisplayName,
+  getMethodShortLabel,
+  evaluateComparisonCondition,
+  calculateReportKPIs,
+} from "../../src/features/report/formatters";
 
 const matrix = distanceMatrix(EXAMPLE.nodes);
 function execute(config: Partial<RunConfig> = {}, dataset = EXAMPLE, initialRoute?: Route) {
@@ -498,5 +508,224 @@ describe("impor, penyimpanan, dan ekspor", () => {
     expect(csv).toContain("A →");
     expect(csv).toContain("'=demo");
     expect(csv).toContain('""quoted""');
+  });
+});
+
+describe("formatter dan logika perbandingan laporan", () => {
+  test("formatDistance, formatPercent, dan formatDuration menangani angka, nol, dan edge case", () => {
+    // formatDistance
+    expect(formatDistance(24.68607423)).toBe("24,686");
+    expect(formatDistance(0)).toBe("0,000");
+    expect(formatDistance(NaN)).toBe("—");
+    expect(formatDistance(undefined)).toBe("—");
+
+    // formatPercent
+    expect(formatPercent(0)).toBe("0,00%");
+    expect(formatPercent(12.345)).toBe("12,35%");
+    expect(formatPercent(0.004)).toBe("0,00%");
+    expect(formatPercent(NaN)).toBe("—");
+
+    // formatDuration
+    expect(formatDuration(0)).toBe("0 ms");
+    expect(formatDuration(0.04)).toBe("<0,1 ms");
+    expect(formatDuration(4.24)).toBe("4,2 ms");
+    expect(formatDuration(150)).toBe("150 ms");
+    expect(formatDuration(1250)).toBe("1,25s");
+    expect(formatDuration(undefined)).toBe("—");
+    expect(formatDuration(-5)).toBe("—");
+  });
+
+  test("formatStageBreakdown membedakan fase Konstruksi, Persiapan, Pencarian, dan Total", () => {
+    const run = execute();
+    run.durations = { constructionMs: 2.5, preparationMs: 1.0, searchMs: 15.2, totalMs: 18.7 };
+    const breakdown = formatStageBreakdown(run);
+    expect(breakdown.totalFormatted).toBe("18,7 ms");
+    expect(breakdown.parts.length).toBe(3);
+    expect(breakdown.parts[0]!.label).toBe("Konstruksi");
+    expect(breakdown.parts[1]!.label).toBe("Persiapan");
+    expect(breakdown.parts[2]!.label).toBe("Pencarian");
+    expect(breakdown.summary).toContain("K:");
+    expect(breakdown.summary).toContain("P:");
+    expect(breakdown.summary).toContain("S:");
+  });
+
+  test("getMethodDisplayName dan getMethodShortLabel konsisten antarkategori", () => {
+    const runNN = {
+      ...execute(),
+      category: "construction" as const,
+      config: { ...defaultConfig, initialMethod: "NN" as const },
+    };
+    const runNI = {
+      ...execute(),
+      category: "construction" as const,
+      config: { ...defaultConfig, initialMethod: "NI" as const },
+    };
+    const runNFI = {
+      ...execute(),
+      category: "construction" as const,
+      config: { ...defaultConfig, initialMethod: "NFI" as const },
+    };
+    const run2Opt = {
+      ...execute(),
+      category: "local-search" as const,
+      config: { ...defaultConfig, algorithm: "2OPT" as const },
+    };
+    const run3Opt = {
+      ...execute(),
+      category: "local-search" as const,
+      config: { ...defaultConfig, algorithm: "3OPT" as const },
+    };
+    const runTS = {
+      ...execute(),
+      category: "metaheuristic" as const,
+      config: { ...defaultConfig, algorithm: "TS" as const },
+    };
+    const runSA = {
+      ...execute(),
+      category: "metaheuristic" as const,
+      config: { ...defaultConfig, algorithm: "SA" as const },
+    };
+
+    expect(getMethodDisplayName(runNN)).toBe("Nearest Neighbor (NN)");
+    expect(getMethodDisplayName(runNI)).toBe("Nearest Insertion (NI)");
+    expect(getMethodDisplayName(runNFI)).toBe("Nearest Farthest Insertion (NFI)");
+    expect(getMethodDisplayName(run2Opt)).toBe("2-OPT Descent");
+    expect(getMethodDisplayName(run3Opt)).toBe("3-OPT Descent");
+    expect(getMethodDisplayName(runTS)).toBe("Tabu Search (TS)");
+    expect(getMethodDisplayName(runSA)).toBe("Simulated Annealing (SA)");
+
+    expect(getMethodShortLabel(run2Opt)).toBe("2-OPT");
+    expect(getMethodShortLabel(run3Opt)).toBe("3-OPT");
+    expect(getMethodShortLabel(runTS)).toBe("TS");
+    expect(getMethodShortLabel(runSA)).toBe("SA");
+  });
+
+  test("evaluateComparisonCondition membedakan acuan, dataset, rute awal, dan iterasi", () => {
+    const runRef = {
+      ...execute({ algorithm: "2OPT", category: "local-search" as const }),
+      id: "run-ref",
+    };
+    const runSameInput = {
+      ...execute({ algorithm: "3OPT", category: "local-search" as const }),
+      id: "run-same-input",
+      initialRoute: [...runRef.initialRoute],
+    };
+    const runDiffRoute = {
+      ...execute({ algorithm: "2OPT", category: "local-search" as const }),
+      id: "run-diff-route",
+      initialRoute: [1, 0, 2, 3, 4, 5],
+    };
+    const diffDataset = {
+      ...EXAMPLE,
+      id: "other-dataset",
+      nodes: EXAMPLE.nodes.map((n) => ({ ...n, x: n.x + 10 })),
+    };
+    const runDiffDataset = { ...execute(), id: "run-diff-ds", dataset: diffDataset };
+
+    // Acuan sendiri
+    expect(evaluateComparisonCondition(runRef, runRef).label).toBe("Acuan");
+    expect(evaluateComparisonCondition(runRef, runRef).className).toBe("same");
+
+    // Dataset berbeda
+    expect(evaluateComparisonCondition(runDiffDataset, runRef).label).toBe("Dataset Berbeda");
+    expect(evaluateComparisonCondition(runDiffDataset, runRef).className).toBe("different");
+
+    // Local search dengan rute awal sama
+    expect(evaluateComparisonCondition(runSameInput, runRef).label).toBe(
+      "Dataset & Rute Awal Sama",
+    );
+    expect(evaluateComparisonCondition(runSameInput, runRef).className).toBe("same");
+
+    // Local search dengan rute awal beda
+    expect(evaluateComparisonCondition(runDiffRoute, runRef).label).toBe(
+      "Dataset Sama (Beda Rute)",
+    );
+    expect(evaluateComparisonCondition(runDiffRoute, runRef).className).toBe("different");
+
+    // Metaheuristik: batas iterasi sama vs beda
+    const runTS = {
+      ...execute({ algorithm: "TS", maxIterations: 100 }),
+      id: "run-ts",
+      category: "metaheuristic" as const,
+    };
+    const runSAIdentical = {
+      ...execute({ algorithm: "SA", maxIterations: 100 }),
+      id: "run-sa-ident",
+      category: "metaheuristic" as const,
+      initialRoute: [...runTS.initialRoute],
+    };
+    const runSADiffIter = {
+      ...execute({ algorithm: "SA", maxIterations: 500 }),
+      id: "run-sa-diff-iter",
+      category: "metaheuristic" as const,
+      initialRoute: [...runTS.initialRoute],
+    };
+
+    expect(evaluateComparisonCondition(runSAIdentical, runTS).label).toBe(
+      "Dataset, Rute & Iterasi Sama",
+    );
+    expect(evaluateComparisonCondition(runSADiffIter, runTS).label).toBe(
+      "Dataset & Rute Sama (Beda Iterasi)",
+    );
+  });
+
+  test("calculateReportKPIs mendeteksi hasil seri, mengelompokkan data sebanding, dan memfilter dataset lain", () => {
+    // Dua hasil local search pada fixture enam node dengan jarak identik 24.686
+    const run2Opt = {
+      ...execute({ algorithm: "2OPT", category: "local-search" as const }),
+      id: "run-2opt",
+      bestCost: 24.6860742303,
+      initialCost: 24.6860742303,
+      durations: { constructionMs: 2, preparationMs: 0, searchMs: 5, totalMs: 7 },
+    };
+    const run3Opt = {
+      ...execute({ algorithm: "3OPT", category: "local-search" as const }),
+      id: "run-3opt",
+      bestCost: 24.6860742303,
+      initialCost: 24.6860742303,
+      durations: { constructionMs: 2, preparationMs: 0, searchMs: 8, totalMs: 10 },
+      initialRoute: [...run2Opt.initialRoute],
+    };
+    // Hasil pada dataset lain tidak boleh mempengaruhi KPI dataset acuan
+    const otherDataset = {
+      ...EXAMPLE,
+      id: "other",
+      nodes: EXAMPLE.nodes.map((n) => ({ ...n, x: n.x * 2 })),
+    };
+    const runOther = {
+      ...execute(),
+      id: "run-other",
+      dataset: otherDataset,
+      bestCost: 10.0, // lebih kecil tapi di dataset lain
+    };
+
+    const kpis = calculateReportKPIs([run2Opt, run3Opt, runOther], run2Opt);
+
+    // 1. Jarak terendah pada dataset acuan mendeteksi SERI
+    expect(kpis.bestDistance).not.toBeNull();
+    expect(kpis.bestDistance!.valueFormatted).toBe("24,686");
+    expect(kpis.bestDistance!.isTie).toBe(true);
+    expect(kpis.bestDistance!.tiedCount).toBe(2);
+    expect(kpis.bestDistance!.methodsLabel).toContain("Seri · 2 hasil");
+    expect(kpis.bestDistance!.methodsLabel).toContain("2-OPT");
+    expect(kpis.bestDistance!.methodsLabel).toContain("3-OPT");
+
+    // 2. Rata-rata perbaikan kelompok sebanding (kedua run 0% perbaikan)
+    expect(kpis.avgImprovement).not.toBeNull();
+    expect(kpis.avgImprovement!.valueFormatted).toBe("0,00%");
+    expect(kpis.avgImprovement!.sampleCount).toBe(2);
+
+    // 3. Durasi tercepat dalam kelompok (run2Opt 7ms vs run3Opt 10ms)
+    expect(kpis.fastestDuration).not.toBeNull();
+    expect(kpis.fastestDuration!.valueFormatted).toBe("7 ms");
+
+    // 4. Total eksperimen
+    expect(kpis.totalRuns.count).toBe(3);
+
+    // Jika hanya 1 run sebanding, rata-rata dan durasi menampilkan '—'
+    const singleKpis = calculateReportKPIs([run2Opt], run2Opt);
+    expect(singleKpis.avgImprovement!.valueFormatted).toBe("—");
+    expect(singleKpis.avgImprovement!.subLabel).toContain("Perlu minimal 2");
+    expect(singleKpis.fastestDuration!.valueFormatted).toBe("—");
   });
 });

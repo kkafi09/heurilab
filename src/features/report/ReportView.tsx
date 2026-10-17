@@ -14,13 +14,24 @@ import {
 } from "lucide-react";
 import { Button, Empty, formatNumber, stopLabels } from "../../components/ui";
 import { Select } from "../../components/ui/select";
-import { distanceMatrix, datasetKey, type Dataset } from "../../domain/tsp/model";
+import { distanceMatrix, type Dataset } from "../../domain/tsp/model";
 import {
   type RunResult,
   type TraceStep,
   type RunCategory,
+  EPSILON,
 } from "../../domain/algorithms/experiment";
 import { exportComparison, exportRun } from "../../services/export";
+import {
+  formatDistance,
+  formatPercent,
+  formatDuration,
+  formatStageBreakdown,
+  getMethodDisplayName,
+  getMethodShortLabel,
+  evaluateComparisonCondition,
+  calculateReportKPIs,
+} from "./formatters";
 
 function getCategoryBadge(category?: RunCategory) {
   switch (category) {
@@ -43,68 +54,7 @@ function getCategoryBadge(category?: RunCategory) {
   }
 }
 
-function getMethodTitle(run: RunResult) {
-  if (run.category === "construction") {
-    if (run.config.initialMethod === "NN") return "Nearest Neighbor (NN)";
-    if (run.config.initialMethod === "NI") return "Nearest Insertion (NI)";
-    return "Nearest Farthest Insertion (NFI)";
-  }
-  if (run.category === "local-search") {
-    return run.config.algorithm === "3OPT" || run.config.improve === "3OPT"
-      ? "3-OPT Descent"
-      : "2-OPT Descent";
-  }
-  return run.config.algorithm === "TS" ? "Tabu Search (TS)" : "Simulated Annealing (SA)";
-}
-
-function evaluateCondition(
-  target: RunResult,
-  reference: RunResult | null,
-): { label: string; className: "same" | "different" | "neutral" } {
-  if (!reference || target.id === reference.id) {
-    return { label: "Acuan", className: "same" };
-  }
-  const datasetMatches = datasetKey(target.dataset) === datasetKey(reference.dataset);
-  if (!datasetMatches) {
-    return { label: "Dataset Berbeda", className: "different" };
-  }
-  if (target.category === "metaheuristic" && reference.category === "metaheuristic") {
-    const routeMatches = target.initialRoute.join(",") === reference.initialRoute.join(",");
-    const iterMatches = target.config.maxIterations === reference.config.maxIterations;
-    if (routeMatches && iterMatches) {
-      return { label: "Kondisi Identik", className: "same" };
-    }
-    if (routeMatches) {
-      return { label: "Batas Iterasi Beda", className: "different" };
-    }
-    return { label: "Rute Awal Beda", className: "different" };
-  }
-  return { label: "Dataset Sama", className: "neutral" };
-}
-
-function formatStageDurations(run: RunResult) {
-  const d = run.durations;
-  if (!d) {
-    return {
-      main: `${(run.durationMs / 1000).toFixed(2)}s`,
-      sub: null,
-    };
-  }
-  const parts: string[] = [];
-  if (d.constructionMs !== undefined && d.constructionMs > 0) {
-    parts.push(`K: ${d.constructionMs.toFixed(0)}ms`);
-  }
-  if (d.preparationMs !== undefined && d.preparationMs > 0) {
-    parts.push(`P: ${d.preparationMs.toFixed(0)}ms`);
-  }
-  if (d.searchMs !== undefined && d.searchMs > 0) {
-    parts.push(`S: ${d.searchMs.toFixed(0)}ms`);
-  }
-  return {
-    main: `${(d.totalMs / 1000).toFixed(2)}s`,
-    sub: parts.length > 0 ? parts.join(" · ") : null,
-  };
-}
+const getMethodTitle = getMethodDisplayName;
 
 export function ReportView({
   runs,
@@ -123,32 +73,23 @@ export function ReportView({
   onClearRuns: () => void;
   onBackToPlayground: () => void;
 }) {
+  // Reference run untuk acuan perbandingan
+  const [referenceRunId, setReferenceRunId] = useState<string>(activeRun?.id ?? runs[0]?.id ?? "");
+  // Run terpilih untuk analisis detail/trace
   const [selectedRunId, setSelectedRunId] = useState<string>(activeRun?.id ?? runs[0]?.id ?? "");
+
   const [compareRunId, setCompareRunId] = useState<string>("");
   const [selectedStep, setSelectedStep] = useState<number>(-1);
   const [tab, setTab] = useState<"comparison" | "trace" | "matrix">("comparison");
   const [matrixSource, setMatrixSource] = useState<"canvas" | "run">("canvas");
 
-  const run = runs.find((r) => r.id === selectedRunId) ?? activeRun ?? runs[0] ?? null;
+  // Fallback acuan: jika acuan saat ini tidak ditemukan (misal dihapus), gunakan activeRun atau run terbaru
+  const reference = runs.find((r) => r.id === referenceRunId) ?? activeRun ?? runs[0] ?? null;
+  const run = runs.find((r) => r.id === selectedRunId) ?? reference ?? runs[0] ?? null;
   const compareRun = runs.find((r) => r.id === compareRunId) ?? null;
 
-  const bestRunOverall =
-    runs.length > 0
-      ? runs.reduce((best, cur) => (cur.bestCost < best.bestCost ? cur : best), runs[0]!)
-      : null;
-
-  const nonConstructionRuns = runs.filter((r) => r.category !== "construction");
-  const avgImprovement =
-    nonConstructionRuns.length > 0
-      ? nonConstructionRuns.reduce((acc, r) => {
-          const imp =
-            r.initialCost === 0 ? 0 : ((r.initialCost - r.bestCost) / r.initialCost) * 100;
-          return acc + imp;
-        }, 0) / nonConstructionRuns.length
-      : null;
-
-  const fastestDuration =
-    runs.length > 0 ? Math.min(...runs.map((r) => r.durations?.totalMs ?? r.durationMs)) : 0;
+  const kpis = calculateReportKPIs(runs, reference);
+  const hasMetaheuristic = runs.some((r) => r.category === "metaheuristic");
 
   if (runs.length === 0 && !activeRun) {
     return (
@@ -171,15 +112,20 @@ export function ReportView({
     <div className="report-view-container">
       {/* Report Header Bar */}
       <div className="report-header-bar">
-        <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={onBackToPlayground}>
+        <div className="report-header-left">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBackToPlayground}
+            aria-label="Kembali ke Playground"
+          >
             <ArrowLeft size={15} />
             <span>Kembali ke Playground</span>
           </Button>
           <div>
-            <h2 className="report-title">Laporan & Perbandingan Eksperimen</h2>
+            <h2 className="report-title">Laporan eksperimen</h2>
             <span className="small muted">
-              Total {runs.length} hasil run tersimpan dalam sesi ini (
+              Total {runs.length} hasil tersimpan dalam sesi ini (
               {runs.filter((r) => r.category === "construction").length} Konstruksi ·{" "}
               {runs.filter((r) => r.category === "local-search").length} Local Search ·{" "}
               {runs.filter((r) => r.category === "metaheuristic").length} Metaheuristik)
@@ -187,11 +133,16 @@ export function ReportView({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="report-header-toolbar">
           {run && (
-            <Button size="sm" variant="outline" onClick={() => exportRun(run)}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => exportRun(run)}
+              title={`Ekspor detail run #${runs.length - runs.findIndex((r) => r.id === run.id)}`}
+            >
               <Download size={14} />
-              Ekspor JSON Run Ini
+              <span>Ekspor JSON (#{run.id.slice(0, 6)})</span>
             </Button>
           )}
           <Button
@@ -201,22 +152,22 @@ export function ReportView({
             onClick={() => exportComparison(runs)}
           >
             <Download size={14} />
-            Ekspor CSV
+            <span>Ekspor CSV</span>
           </Button>
           <Button
             size="sm"
             variant="outline"
-            className="text-red-600 border-red-200 hover:bg-red-50"
+            className="btn-danger-secondary"
             disabled={runs.length === 0}
             onClick={() => {
               if (window.confirm("Apakah Anda yakin ingin menghapus seluruh riwayat eksperimen?")) {
                 onClearRuns();
               }
             }}
-            title="Hapus seluruh riwayat run"
+            title="Hapus seluruh riwayat eksperimen"
           >
             <Trash2 size={14} />
-            <span>Bersihkan Riwayat</span>
+            <span>Hapus riwayat</span>
           </Button>
         </div>
       </div>
@@ -229,7 +180,7 @@ export function ReportView({
           onClick={() => setTab("comparison")}
         >
           <TableProperties size={15} />
-          <span>Tabel Perbandingan Leaderboard</span>
+          <span>Perbandingan</span>
         </button>
         <button
           type="button"
@@ -238,7 +189,7 @@ export function ReportView({
           disabled={!run}
         >
           <Activity size={15} />
-          <span>Analisis Detail & Trace ({run ? getMethodTitle(run) : "—"})</span>
+          <span>Detail & Trace</span>
         </button>
         <button
           type="button"
@@ -246,7 +197,7 @@ export function ReportView({
           onClick={() => setTab("matrix")}
         >
           <Layers size={15} />
-          <span>Matriks Jarak Interaktif</span>
+          <span>Matriks jarak</span>
         </button>
       </div>
 
@@ -255,13 +206,26 @@ export function ReportView({
         <div className="panel report-panel">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">LEADERBOARD PERFORMA</span>
-              <h3>Bandingkan Seluruh Eksperimen</h3>
+              <h3 className="section-title">Perbandingan hasil</h3>
+              {reference && (
+                <div className="reference-callout">
+                  <span className="reference-tag">Acuan:</span>
+                  <strong className="text-slate-800">
+                    #{runs.length - runs.findIndex((r) => r.id === reference.id)} —{" "}
+                    {getMethodDisplayName(reference)}
+                  </strong>
+                  <span className="text-xs text-slate-500">
+                    ({reference.dataset.name} · #{reference.id.slice(0, 6)})
+                  </span>
+                </div>
+              )}
             </div>
-            <span className="small muted">
-              Satu iterasi TS mengevaluasi neighborhood penuh; SA mengevaluasi satu kandidat acak
-              per langkah.
-            </span>
+            {hasMetaheuristic && (
+              <span className="small muted">
+                Satu iterasi TS mengevaluasi seluruh neighborhood; SA mengevaluasi satu kandidat per
+                langkah.
+              </span>
+            )}
           </div>
 
           <div className="table-scroll">
@@ -282,25 +246,32 @@ export function ReportView({
               <tbody>
                 {runs.map((item, idx) => {
                   const isSelected = item.id === run?.id;
+                  const isReference = item.id === reference?.id;
                   const catInfo = getCategoryBadge(item.category);
                   const isConstruction = item.category === "construction";
                   const isLocalSearch = item.category === "local-search";
-                  const impr = isConstruction
+
+                  const isNoChange =
+                    !isConstruction && Math.abs(item.initialCost - item.bestCost) <= EPSILON;
+                  const isImproved = !isConstruction && item.initialCost > item.bestCost + EPSILON;
+                  const rawImpr = isConstruction
                     ? null
                     : item.initialCost === 0
                       ? 0
                       : ((item.initialCost - item.bestCost) / item.initialCost) * 100;
-                  const durationInfo = formatStageDurations(item);
-                  const cond = evaluateCondition(item, runs[0] ?? null);
+
+                  const durationInfo = formatStageBreakdown(item);
+                  const cond = evaluateComparisonCondition(item, reference);
 
                   return (
                     <tr
                       key={item.id}
-                      className={isSelected ? "selected-row" : ""}
+                      className={`${isSelected ? "selected-row" : ""} ${isReference ? "reference-row" : ""}`}
                       onClick={() => {
                         setSelectedRunId(item.id);
-                        onSelectRun(item.id);
+                        setReferenceRunId(item.id);
                       }}
+                      title="Klik untuk memilih sebagai acuan perbandingan dan analisis detail"
                     >
                       <td>
                         <div className="flex items-center gap-1.5 mb-1">
@@ -313,7 +284,7 @@ export function ReportView({
                             #{runs.length - idx}
                           </span>
                         </div>
-                        <strong className="block text-sm">{getMethodTitle(item)}</strong>
+                        <strong className="block text-sm">{getMethodDisplayName(item)}</strong>
                       </td>
                       <td>
                         <strong>{item.dataset.name}</strong>
@@ -322,24 +293,35 @@ export function ReportView({
                         </small>
                       </td>
                       <td>
-                        {isConstruction ? (
-                          <strong className="best-cell">{formatNumber(item.bestCost)}</strong>
+                        {isConstruction || isNoChange ? (
+                          <strong className="best-cell font-tabular">
+                            {formatDistance(item.bestCost)}
+                          </strong>
                         ) : (
                           <>
-                            <span className="muted line-through text-xs mr-1">
-                              {formatNumber(item.initialCost)}
+                            <span className="muted line-through text-xs mr-1 font-tabular">
+                              {formatDistance(item.initialCost)}
                             </span>
-                            <strong className="best-cell">{formatNumber(item.bestCost)}</strong>
+                            <strong className="best-cell font-tabular">
+                              {formatDistance(item.bestCost)}
+                            </strong>
                           </>
                         )}
                       </td>
                       <td>
-                        {impr !== null ? (
+                        {isConstruction ? (
+                          <span className="text-slate-400 font-mono">—</span>
+                        ) : isNoChange ? (
+                          <span className="improvement-neutral">0,00% (Tidak berubah)</span>
+                        ) : isImproved ? (
                           <span className="improvement-badge">
-                            <TrendingDown size={12} /> {impr.toFixed(2)}%
+                            <TrendingDown size={12} />{" "}
+                            {rawImpr! < 0.01 ? "<0,01%" : formatPercent(rawImpr!)}
                           </span>
                         ) : (
-                          <span className="text-slate-400 font-mono">—</span>
+                          <span className="text-slate-400 font-mono text-xs">
+                            {formatPercent(rawImpr!)}
+                          </span>
                         )}
                       </td>
                       <td>
@@ -360,11 +342,18 @@ export function ReportView({
                       <td>
                         <div className="flex items-center gap-1">
                           <Clock size={11} className="text-slate-400" />
-                          <span>{durationInfo.main}</span>
+                          <span className="font-tabular font-medium">
+                            {durationInfo.totalFormatted}
+                          </span>
                         </div>
-                        {durationInfo.sub && (
-                          <small className="text-[10px] text-slate-500 font-mono">
-                            {durationInfo.sub}
+                        {durationInfo.summary && (
+                          <small
+                            className="text-[10px] text-slate-500 font-tabular"
+                            title={durationInfo.parts
+                              .map((p) => `${p.label}: ${p.formatted}`)
+                              .join(", ")}
+                          >
+                            {durationInfo.summary}
                           </small>
                         )}
                       </td>
@@ -395,23 +384,25 @@ export function ReportView({
                         )}
                       </td>
                       <td>
-                        <span className={`condition-tag ${cond.className}`}>{cond.label}</span>
+                        <span className={`condition-tag ${cond.className}`} title={cond.tooltip}>
+                          {cond.label}
+                        </span>
                       </td>
                       <td>
                         <div className="flex items-center gap-1">
                           <Button
                             size="sm"
                             variant="ghost"
-                            aria-label="Buka Detail"
+                            aria-label={`Buka Detail run #${runs.length - idx}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               setSelectedRunId(item.id);
-                              onSelectRun(item.id);
+                              setReferenceRunId(item.id);
                               setTab("trace");
                             }}
                             title="Buka Analisis Detail"
                           >
-                            <Activity size={14} />
+                            <Activity size={14} /> Detail
                           </Button>
                           <Button
                             size="sm"
@@ -427,7 +418,7 @@ export function ReportView({
                           </Button>
                           <button
                             type="button"
-                            className="p-1.5 text-slate-400 hover:text-red-600 rounded transition"
+                            className="delete-run-icon-btn"
                             onClick={(e) => {
                               e.stopPropagation();
                               onRemoveRun(item.id);
@@ -451,57 +442,66 @@ export function ReportView({
             <div className="leaderboard-kpi-grid">
               <div className="kpi-card">
                 <div className="kpi-card-header">
-                  <span className="kpi-card-title">Solusi Terbaik Global</span>
-                  {bestRunOverall && (
+                  <span className="kpi-card-title">Jarak terendah pada dataset acuan</span>
+                  {kpis.bestDistance && (
                     <span
                       className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                        getCategoryBadge(bestRunOverall.category).badgeClass
+                        kpis.bestDistance.isTie
+                          ? "bg-amber-100 text-amber-800 border border-amber-200"
+                          : "bg-teal-100 text-teal-800 border border-teal-200"
                       }`}
                     >
-                      {getMethodTitle(bestRunOverall)}
+                      {kpis.bestDistance.methodsLabel}
                     </span>
                   )}
                 </div>
                 <strong className="kpi-card-value text-teal-800">
-                  {formatNumber(bestRunOverall?.bestCost ?? 0)}
+                  {kpis.bestDistance ? kpis.bestDistance.valueFormatted : "—"}
                 </strong>
                 <span className="kpi-card-sub">
-                  Initial: {formatNumber(bestRunOverall?.initialCost ?? 0)} (
-                  {bestRunOverall?.dataset.unit})
+                  {kpis.bestDistance
+                    ? kpis.bestDistance.subLabel
+                    : "Belum ada hasil selesai pada dataset acuan"}
                 </span>
               </div>
 
               <div className="kpi-card">
                 <div className="kpi-card-header">
-                  <span className="kpi-card-title">Rata-rata Peningkatan</span>
+                  <span className="kpi-card-title">Rata-rata perbaikan kelompok sebanding</span>
                   <TrendingDown size={16} className="text-teal-700" />
                 </div>
                 <strong className="kpi-card-value text-teal-700">
-                  {avgImprovement !== null ? `${avgImprovement.toFixed(2)}%` : "—"}
+                  {kpis.avgImprovement ? kpis.avgImprovement.valueFormatted : "—"}
                 </strong>
                 <span className="kpi-card-sub">
-                  {avgImprovement !== null
-                    ? "Dari metode pencarian & metaheuristik"
-                    : "Hanya metode konstruksi"}
+                  {kpis.avgImprovement
+                    ? kpis.avgImprovement.subLabel
+                    : "Perlu minimal 2 hasil sebanding"}
                 </span>
               </div>
 
               <div className="kpi-card">
                 <div className="kpi-card-header">
-                  <span className="kpi-card-title">Komputasi Tercepat</span>
+                  <span className="kpi-card-title">Durasi total terendah dalam kelompok</span>
                   <Clock size={16} className="text-slate-400" />
                 </div>
-                <strong className="kpi-card-value">{(fastestDuration / 1000).toFixed(2)}s</strong>
-                <span className="kpi-card-sub">Durasi total tersingkat</span>
+                <strong className="kpi-card-value">
+                  {kpis.fastestDuration ? kpis.fastestDuration.valueFormatted : "—"}
+                </strong>
+                <span className="kpi-card-sub">
+                  {kpis.fastestDuration
+                    ? kpis.fastestDuration.subLabel
+                    : "Perlu minimal 2 hasil sebanding"}
+                </span>
               </div>
 
               <div className="kpi-card">
                 <div className="kpi-card-header">
-                  <span className="kpi-card-title">Total Eksperimen</span>
+                  <span className="kpi-card-title">Total eksperimen</span>
                   <CheckCircle2 size={16} className="text-slate-400" />
                 </div>
-                <strong className="kpi-card-value">{runs.length}</strong>
-                <span className="kpi-card-sub">Tersimpan dalam sesi aktif</span>
+                <strong className="kpi-card-value">{kpis.totalRuns.count}</strong>
+                <span className="kpi-card-sub">{kpis.totalRuns.subLabel}</span>
               </div>
             </div>
           )}
@@ -532,9 +532,9 @@ export function ReportView({
                     }}
                   >
                     <span className={`chip-badge ${cat.badgeClass}`}>
-                      #{runs.length - i} {r.config.algorithm}
+                      #{runs.length - i} {getMethodShortLabel(r)}
                     </span>
-                    <span className="chip-cost">{formatNumber(r.bestCost)}</span>
+                    <span className="chip-cost font-tabular">{formatDistance(r.bestCost)}</span>
                     {isSelected && <CheckCircle2 size={13} className="chip-check" />}
                   </button>
                 );
@@ -552,7 +552,7 @@ export function ReportView({
                     EKSPERIMEN
                   </span>
                   <h3 className="flex items-center gap-2">
-                    <span>{getMethodTitle(run)}</span>
+                    <span>{getMethodDisplayName(run)}</span>
                     <span className="text-sm font-normal text-slate-500">· {run.dataset.name}</span>
                   </h3>
                 </div>
@@ -572,7 +572,9 @@ export function ReportView({
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 my-4">
                 <div className="metric-cell primary">
                   <span className="metric-label">Jarak Total Rute</span>
-                  <strong className="metric-value">{formatNumber(run.bestCost)}</strong>
+                  <strong className="metric-value font-tabular">
+                    {formatDistance(run.bestCost)}
+                  </strong>
                   <small className="metric-sub">{run.dataset.unit}</small>
                 </div>
                 <div className="metric-cell">
@@ -587,8 +589,8 @@ export function ReportView({
                 </div>
                 <div className="metric-cell">
                   <span className="metric-label">Waktu Konstruksi</span>
-                  <strong className="metric-value">
-                    {(run.durations?.constructionMs ?? run.durationMs).toFixed(2)}ms
+                  <strong className="metric-value font-tabular">
+                    {formatDuration(run.durations?.constructionMs ?? run.durationMs)}
                   </strong>
                   <small className="metric-sub">
                     {stopLabels[run.stopReason] ?? run.stopReason}
@@ -622,7 +624,7 @@ export function ReportView({
                     EKSPERIMEN
                   </span>
                   <h3 className="flex items-center gap-2">
-                    <span>{getMethodTitle(run)}</span>
+                    <span>{getMethodDisplayName(run)}</span>
                     <span className="text-sm font-normal text-slate-500">· {run.dataset.name}</span>
                   </h3>
                 </div>
@@ -642,12 +644,16 @@ export function ReportView({
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 my-4">
                 <div className="metric-cell primary">
                   <span className="metric-label">Jarak Akhir Terbaik</span>
-                  <strong className="metric-value">{formatNumber(run.bestCost)}</strong>
+                  <strong className="metric-value font-tabular">
+                    {formatDistance(run.bestCost)}
+                  </strong>
                   <small className="metric-sub">{run.dataset.unit}</small>
                 </div>
                 <div className="metric-cell">
                   <span className="metric-label">Jarak Rute Dasar</span>
-                  <strong className="metric-value">{formatNumber(run.initialCost)}</strong>
+                  <strong className="metric-value font-tabular">
+                    {formatDistance(run.initialCost)}
+                  </strong>
                   <small className="metric-sub">Basis: {run.config.initialMethod}</small>
                 </div>
                 <div className="metric-cell">
@@ -659,8 +665,8 @@ export function ReportView({
                 </div>
                 <div className="metric-cell">
                   <span className="metric-label">Durasi Komputasi</span>
-                  <strong className="metric-value">
-                    {((run.durations?.totalMs ?? run.durationMs) / 1000).toFixed(2)}s
+                  <strong className="metric-value font-tabular">
+                    {formatDuration(run.durations?.totalMs ?? run.durationMs)}
                   </strong>
                   <small className="metric-sub">
                     {stopLabels[run.stopReason] ?? run.stopReason}
@@ -778,12 +784,16 @@ export function ReportView({
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 my-4">
                   <div className="metric-cell primary">
                     <span className="metric-label">Jarak Akhir Terbaik</span>
-                    <strong className="metric-value">{formatNumber(run.bestCost)}</strong>
+                    <strong className="metric-value font-tabular">
+                      {formatDistance(run.bestCost)}
+                    </strong>
                     <small className="metric-sub">{run.dataset.unit}</small>
                   </div>
                   <div className="metric-cell">
                     <span className="metric-label">Jarak Solusi Awal</span>
-                    <strong className="metric-value">{formatNumber(run.initialCost)}</strong>
+                    <strong className="metric-value font-tabular">
+                      {formatDistance(run.initialCost)}
+                    </strong>
                     <small className="metric-sub">{run.config.initialMethod}</small>
                   </div>
                   <div className="metric-cell">
@@ -795,8 +805,8 @@ export function ReportView({
                   </div>
                   <div className="metric-cell">
                     <span className="metric-label">Durasi Komputasi</span>
-                    <strong className="metric-value">
-                      {((run.durations?.totalMs ?? run.durationMs) / 1000).toFixed(2)}s
+                    <strong className="metric-value font-tabular">
+                      {formatDuration(run.durations?.totalMs ?? run.durationMs)}
                     </strong>
                     <small className="metric-sub">
                       {stopLabels[run.stopReason] ?? run.stopReason}

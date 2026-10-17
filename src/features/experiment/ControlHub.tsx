@@ -11,7 +11,7 @@ import {
   History,
   Trash2,
 } from "lucide-react";
-import { Button, Field, formatNumber, stopLabels } from "../../components/ui";
+import { Button, Field, stopLabels } from "../../components/ui";
 import { Select } from "../../components/ui/select";
 import {
   validateConfig,
@@ -20,8 +20,16 @@ import {
   type InitialMethod,
   type RunConfig,
   type RunResult,
+  EPSILON,
 } from "../../domain/algorithms/experiment";
 import type { Dataset } from "../../domain/tsp/model";
+import {
+  formatDistance,
+  formatPercent,
+  formatDuration,
+  getMethodShortLabel,
+  getMethodDisplayName,
+} from "../report/formatters";
 
 export function ControlHub({
   dataset,
@@ -497,21 +505,27 @@ export function ControlHub({
             <div className="metrics-grid">
               <div className="metric-cell primary">
                 <span className="metric-label">Jarak Terbaik</span>
-                <strong className="metric-value">{run ? formatNumber(run.bestCost) : "—"}</strong>
+                <strong className="metric-value font-tabular">
+                  {run ? formatDistance(run.bestCost) : "—"}
+                </strong>
                 <small className="metric-sub">{dataset.unit}</small>
               </div>
 
               <div className="metric-cell">
                 <span className="metric-label">Peningkatan</span>
-                <strong className="metric-value">
+                <strong className="metric-value font-tabular">
                   {run
                     ? run.category === "construction"
                       ? "—"
-                      : `${improvement.toFixed(2)}%`
+                      : Math.abs(run.initialCost - run.bestCost) <= EPSILON
+                        ? "0,00%"
+                        : improvement < 0.01
+                          ? "<0,01%"
+                          : formatPercent(improvement)
                     : "—"}
                 </strong>
                 <small className="metric-sub">
-                  Awal: {run ? formatNumber(run.initialCost) : "—"}
+                  Awal: {run ? formatDistance(run.initialCost) : "—"}
                 </small>
               </div>
 
@@ -519,7 +533,7 @@ export function ControlHub({
                 <span className="metric-label">
                   {run?.category === "local-search" ? "Langkah" : "Iterasi"}
                 </span>
-                <strong className="metric-value">
+                <strong className="metric-value font-tabular">
                   {run
                     ? run.category === "construction"
                       ? "—"
@@ -535,16 +549,10 @@ export function ControlHub({
 
               <div className="metric-cell">
                 <span className="metric-label">Waktu</span>
-                <strong className="metric-value">
-                  {run ? `${(run.durationMs / 1000).toFixed(2)}s` : "—"}
+                <strong className="metric-value font-tabular">
+                  {run ? formatDuration(run.durations?.totalMs ?? run.durationMs) : "—"}
                 </strong>
-                <small className="metric-sub">
-                  {run
-                    ? run.category === "construction"
-                      ? run.config.initialMethod
-                      : run.config.algorithm
-                    : "Metode"}
-                </small>
+                <small className="metric-sub">{run ? getMethodShortLabel(run) : "Metode"}</small>
               </div>
             </div>
           </div>
@@ -552,13 +560,12 @@ export function ControlHub({
       ) : (
         /* Runs Tab (Recent Experiments) */
         <div className="runs-history-content">
-          <div className="control-header">
+          <div className="control-header history-header">
             <div>
-              <span className="eyebrow">RIWAYAT SESI</span>
-              <h3 className="section-title">Hasil yang Pernah Dijalankan</h3>
+              <h3 className="section-title">Riwayat eksperimen</h3>
             </div>
             <Button size="sm" variant="ghost" onClick={onOpenReport}>
-              Lihat Report Penuh
+              Buka Report
             </Button>
           </div>
 
@@ -574,78 +581,94 @@ export function ControlHub({
             <div className="runs-list">
               {runs.map((r, index) => {
                 const isSelected = run?.id === r.id;
-                const runImpr =
+                const isNoChange =
+                  r.category !== "construction" && Math.abs(r.initialCost - r.bestCost) <= EPSILON;
+                const rawImpr =
                   r.initialCost === 0 ? 0 : ((r.initialCost - r.bestCost) / r.initialCost) * 100;
 
-                const categoryLabel =
-                  r.category === "construction"
-                    ? "Konstruksi"
-                    : r.category === "local-search"
-                      ? "Local Search"
-                      : "Metaheuristik";
-
                 return (
-                  <button
-                    type="button"
-                    key={r.id}
-                    className={`run-card text-left w-full ${isSelected ? "selected" : ""}`}
-                    onClick={() => onSelectRun(r.id)}
-                    aria-label={`Pilih run #${runs.length - index} ${r.config.algorithm} ${r.dataset.name}`}
-                  >
-                    <div className="run-card-header">
-                      <div className="flex items-center gap-2">
-                        <span className="run-index">#{runs.length - index}</span>
-                        <strong className="algorithm-tag">{r.config.algorithm}</strong>
-                        <span className="run-dataset-name">{r.dataset.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="run-duration">
-                          <Clock size={11} /> {(r.durationMs / 1000).toFixed(2)}s
-                        </span>
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          className="delete-run-icon-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onRemoveRun(r.id);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.stopPropagation();
-                              onRemoveRun(r.id);
-                            }
-                          }}
-                          title="Hapus run dari riwayat"
-                          aria-label={`Hapus run #${runs.length - index}`}
-                        >
-                          <Trash2 size={12} />
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="run-card-body">
-                      <div>
-                        <span className="run-cost-label">Jarak Terbaik:</span>
-                        <span className="run-best-cost">{formatNumber(r.bestCost)}</span>
-                      </div>
-                      {r.category !== "construction" && (
-                        <div className="run-improvement">
-                          <TrendingDown size={12} />
-                          <span>{runImpr.toFixed(1)}%</span>
+                  <div key={r.id} className={`run-card ${isSelected ? "selected" : ""}`}>
+                    <button
+                      type="button"
+                      className="run-card-main-action"
+                      onClick={() => onSelectRun(r.id)}
+                      aria-label={`Pilih run #${runs.length - index} ${getMethodDisplayName(r)} pada dataset ${r.dataset.name}`}
+                    >
+                      {/* Baris 1: Metode & ID & Durasi */}
+                      <div className="run-card-header">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="run-index">#{runs.length - index}</span>
+                          <strong className="algorithm-tag truncate">
+                            {getMethodShortLabel(r)}
+                          </strong>
+                          <span className="text-slate-400 text-xs">·</span>
+                          <span className="text-[11px] font-mono text-slate-500">
+                            #{r.id.slice(0, 6)}
+                          </span>
                         </div>
-                      )}
-                    </div>
+                        <span className="run-duration font-tabular">
+                          <Clock size={11} /> {formatDuration(r.durations?.totalMs ?? r.durationMs)}
+                        </span>
+                      </div>
 
-                    <div className="run-card-footer">
-                      <span className="run-meta">
-                        {categoryLabel} · {r.config.initialMethod}
-                        {r.config.improve !== "none" ? ` + ${r.config.improve}` : ""}
-                        {r.category !== "construction" ? ` · ${r.iterations} langkah` : ""}
-                      </span>
-                      {isSelected && <span className="active-badge">Aktif di kanvas</span>}
-                    </div>
-                  </button>
+                      {/* Baris 2: Dataset */}
+                      <div className="run-card-dataset">
+                        <span className="run-dataset-name">{r.dataset.name}</span>
+                        <span className="text-[11px] text-slate-400 font-normal">
+                          ({r.dataset.nodes.length} node)
+                        </span>
+                      </div>
+
+                      {/* Baris 3: Jarak & Status Perbaikan */}
+                      <div className="run-card-body">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="run-cost-label">Jarak:</span>
+                          <strong className="run-best-cost font-tabular">
+                            {formatDistance(r.bestCost)}
+                          </strong>
+                        </div>
+                        {r.category !== "construction" &&
+                          (isNoChange ? (
+                            <span className="text-[11px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                              0,00%
+                            </span>
+                          ) : (
+                            <div className="run-improvement">
+                              <TrendingDown size={11} />
+                              <span className="font-tabular">
+                                {rawImpr < 0.01 ? "<0,01%" : formatPercent(rawImpr)}
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+
+                      {/* Baris 4: Meta & Status Aktif di Kanvas */}
+                      <div className="run-card-footer">
+                        <span className="run-meta">
+                          {r.category === "construction"
+                            ? `Start: ${r.config.startId}`
+                            : r.category === "local-search"
+                              ? `Basis: ${r.config.initialMethod} · ${r.iterations} langkah`
+                              : `${r.config.initialMethod}${r.config.improve !== "none" ? `+${r.config.improve}` : ""} · ${r.iterations} iter`}
+                        </span>
+                        {isSelected && <span className="active-badge">Ditampilkan di kanvas</span>}
+                      </div>
+                    </button>
+
+                    {/* Sibling Delete Button */}
+                    <button
+                      type="button"
+                      className="delete-run-icon-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveRun(r.id);
+                      }}
+                      title="Hapus run dari riwayat"
+                      aria-label={`Hapus run #${runs.length - index} (${r.id.slice(0, 8)})`}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 );
               })}
             </div>
