@@ -37,10 +37,13 @@ export const formatNumber = (value: number) =>
   Number.isFinite(value)
     ? value.toLocaleString("id-ID", { minimumFractionDigits: 3, maximumFractionDigits: 3 })
     : "—";
-export const stopLabels = {
+export const stopLabels: Record<string, string> = {
   "iteration-limit": "Batas iterasi tercapai",
   "minimum-temperature": "Suhu minimum tercapai",
   "no-eligible": "Tidak ada kandidat eligible",
   "empty-neighborhood": "Neighborhood kosong",
+  "step-limit": "Batas langkah tercapai",
+  "no-improvement": "Optimum lokal: tidak ada perbaikan",
+  completed: "Selesai (lintasan penuh)",
   cancelled: "Dibatalkan pengguna",
 };

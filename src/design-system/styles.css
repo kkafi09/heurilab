@@ -868,6 +868,10 @@ td {
   background: #fff1de;
   color: #8f5e28;
 }
+.neutral {
+  background: #f1f5f9;
+  color: #475569;
+}
 .matrix-scroll {
   max-height: 380px;
   margin-top: 16px;
@@ -2356,58 +2360,99 @@ footer i {
 /* =========================================================
    HELP MODAL TABS & DIALOG
    ========================================================= */
-.help-modal-panel {
+.modal-dialog.help-modal-dialog {
   background: #ffffff;
   border-radius: 16px;
-  width: 100%;
-  max-width: 640px;
-  max-height: 85vh;
+  width: calc(100% - 32px);
+  max-width: 720px;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
   border: 1px solid #e2e8f0;
+  padding: 0;
+  margin: 16px auto;
+}
+.help-modal-header {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
+  background: #ffffff;
+}
+.help-modal-header h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
 }
 .help-tabs-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 16px;
+  gap: 6px;
+  padding: 8px 16px;
   background: #f8fafc;
   border-bottom: 1px solid #e2e8f0;
-  overflow-x: auto;
+  flex-shrink: 0;
+}
+@media (max-width: 639px) {
+  .help-tabs-bar {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    padding: 8px 12px;
+  }
 }
 .help-tab-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
   font-weight: 550;
   color: #64748b;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.3;
   transition: all 0.15s ease;
 }
 .help-tab-btn:hover {
   color: #1e293b;
   background: #edf2f7;
 }
-.help-tab-btn.active {
+.help-tab-btn.active,
+.help-tab-btn[aria-selected="true"] {
   color: #0f766e;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   font-weight: 650;
 }
+.help-content-area,
 .help-modal-content {
-  padding: 20px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  font-size: 13px;
+  padding: 20px;
+  font-size: 14px;
   color: #334155;
   line-height: 1.6;
+}
+.help-modal-footer {
+  padding: 12px 20px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-shrink: 0;
+  background: #f8fafc;
 }
 .help-feature-card {
   padding: 14px 16px;
@@ -2421,11 +2466,12 @@ footer i {
 }
 .help-feature-title {
   font-weight: 650;
+  font-size: 15px;
   color: #1e293b;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 /* =========================================================
@@ -2544,6 +2590,17 @@ footer i {
   color: #0f766e !important;
   font-weight: 750 !important;
   box-shadow: inset 0 0 0 1.5px #0d9488;
+}
+
+.metric-value,
+.best-cell,
+.run-best-cost,
+.chip-cost,
+.kpi-card-value,
+.comparison-table td,
+.trace-table td,
+.interactive-matrix-table td {
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {

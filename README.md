@@ -71,16 +71,20 @@ di browser pengguna.
 1. Gunakan contoh sintetis enam node atau edit tabel ID/X/Y. Klik **Terapkan** setelah selesai.
 2. Untuk Excel, klik **Impor Excel**, pilih .xlsx, pilih sheet dan kolom, periksa preview,
    lalu **Terapkan impor**. **Unduh template** menghasilkan workbook dengan contoh enam node.
-3. Pilih **Nearest Neighbor** atau **Nearest Insertion**, titik awal, dan opsi 2-OPT jika diperlukan.
-4. Pilih TS atau SA, tentukan parameter, kemudian **Jalankan eksperimen**.
+3. Pilih **Jenis Eksperimen**:
+   - **Konstruksi:** Bangun tour awal dengan **Nearest Neighbor (NN)**, **Nearest Insertion (NI)**, atau **Nearest Farthest Insertion (NFI)** dari titik awal pilihan.
+   - **Local Search:** Bentuk tour dasar lalu lakukan perbaikan turunan deterministik dengan **2-OPT** atau **3-OPT**.
+   - **Metaheuristik:** Pilih **Tabu Search (TS)** atau **Simulated Annealing (SA)**, tentukan pembentuk tour awal, perbaikan awal (Tidak ada / 2-OPT / 3-OPT), serta parameter pencarian.
+4. Tentukan parameter, kemudian **Jalankan eksperimen**.
 5. Gunakan **Jeda**, **Lanjutkan**, atau **Batalkan**. Best-so-far tetap tersedia setelah cancel.
-6. Klik nomor iterasi dalam **Trace iterasi** untuk melihat candidate/current/best dan alasan keputusan.
-   Klik **Tampilkan hasil akhir** untuk kembali ke hasil final.
-7. Klik **Jalankan metode lain** untuk menggunakan snapshot dataset, initial route, dan budget yang sama.
-   Tab **Perbandingan** menampilkan 10 run terakhir; **Lihat run** membuka detail run lama.
+6. Pada TS/SA, telusuri **Trace iterasi** untuk melihat candidate/current/best dan alasan keputusan.
+   Klik nomor iterasi untuk melihat snapshot rute pada langkah tersebut.
+7. Buka tab **Report** untuk melihat ringkasan metrik, evaluasi perbandingan, rincian durasi bertahap
+   (konstruksi, persiapan perbaikan, dan pencarian), serta ekspor.
+   Tombol **Jalankan metode lain** memungkinkan perbandingan adil dengan snapshot dataset dan rute awal yang identik.
 8. **Ekspor JSON** menyimpan dataset, parameter, rute, dan trace lengkap. **Ekspor CSV** menyimpan ringkasan perbandingan.
 
-UI menyediakan **Panduan**; aturan algoritma dan parameter dijelaskan dalam docs/METHODOLOGY.md.
+UI menyediakan **Panduan**; aturan algoritma dan parameter dijelaskan lengkap dalam `docs/METHODOLOGY.md`.
 
 ## Data dan parameter
 
@@ -89,11 +93,11 @@ UI menyediakan **Panduan**; aturan algoritma dan parameter dijelaskan dalam docs
 - Excel .xlsx maksimum 10 MB; header default `id`, `x`, `y`, atau kolom dipetakan manual.
 - Angka desimal memakai titik ketika dimasukkan. Baris kosong Excel dilewati; error memuat nomor baris sumber.
 - Sheet dengan lebih dari 1.001 baris data/blank ditolak untuk menjaga preview terbatas tanpa memotong data diam-diam.
-- Default: 2.000 iterasi, tabu tenure 7; SA seed 42, suhu 100, cooling 0,95,
-  20 iterasi per suhu, suhu minimum 0,001. Batas iterasi maksimum 10.000.
-- Jarak awal contoh NN sudah optimal pada fixture ini: **24,686074230319797** unit. Improvement 0%
-  pada contoh adalah hasil yang benar; TS/SA tetap dapat memperlihatkan eksplorasi current.
-- TS default pada contoh dapat berhenti karena seluruh kandidat menjadi tabu. Ini alasan berhenti yang sah.
+- Parameter default TS: 2.000 iterasi maksimum, tabu tenure 7.
+- Parameter default SA: seed 42, suhu awal 100, cooling rate ($\alpha$) 0,95, 20 iterasi per suhu, suhu minimum ($T_{\min}$) 0,001. Batas iterasi maksimum 10.000.
+- Jarak awal contoh NN sudah optimal pada fixture enam node: **24,686074230319797** unit. Improvement 0%
+  pada contoh adalah hasil yang sah; TS/SA tetap dapat memperlihatkan eksplorasi pencarian.
+- TS default pada contoh enam node dapat berhenti karena seluruh kandidat menjadi tabu. Ini alasan berhenti yang sah.
 
 ## Perintah pengembangan
 
@@ -114,9 +118,9 @@ Screenshot/trace pengujian berada di `test-results/` dan tidak termasuk source p
 
 ## Penyimpanan dan troubleshooting
 
-Sesi tersimpan otomatis di IndexedDB: dataset aktif, parameter valid terakhir, dan 10 run terminal
-beserta trace. Tunggu indikator **Tersimpan lokal** sebelum menutup tab. Draft belum diterapkan,
-run yang masih berjalan/dijeda, dan pilihan tampilan iterasi tidak dipulihkan setelah refresh.
+Sesi tersimpan otomatis di IndexedDB (versi format 2 dengan migrasi otomatis dari versi 1): dataset aktif,
+parameter valid terakhir, dan 10 run terminal beserta trace. Tunggu indikator **Tersimpan lokal** sebelum menutup tab.
+Draft belum diterapkan, run yang masih berjalan/dijeda, dan pilihan tampilan iterasi tidak dipulihkan setelah refresh.
 
 Jika penyimpanan gagal atau sesi lama tidak valid, aplikasi tetap berjalan dalam memori. Ekspor hasil
 sebelum menutup tab. Tombol **Simpan sesi saat ini** mencoba menyimpan workspace yang sedang tampil.
@@ -132,7 +136,7 @@ Dataset contoh sintetis; kecocokan dataset dan formulasi dosen belum diverifikas
 belum tersedia. Heuristik tidak menjamin optimum pada dataset lain. Iterasi sama tidak berarti
 beban komputasi sama: TS mengevaluasi seluruh neighborhood, SA satu kandidat per iterasi.
 
-3-OPT, matriks jarak resmi, Tauri desktop, hosting publik, akun/backend, dan pitch deck mengikuti roadmap
+Tauri desktop, hosting publik, akun/backend, dan pitch deck mengikuti roadmap
 setelah MVP. Rencana MVP ada pada MVP_PLAN.md; roadmap produk lengkap ada pada PLAN.md.
 
 Komponen beUI gratis berlisensi MIT; atribusi dan lisensinya ada pada THIRD_PARTY_NOTICES.md.

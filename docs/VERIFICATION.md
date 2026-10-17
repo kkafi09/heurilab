@@ -1,61 +1,49 @@
-# Verifikasi Web MVP
+# Verifikasi Aplikasi HeuriLab
+
+## Verifikasi Pembaruan UI & Fitur Lengkap (17 Oktober 2026)
+
+Tanggal: 17 Oktober 2026. Lingkungan: Windows, Bun 1.4.2, Node.js 22.22.0.
+Browser: Google Chrome dan Microsoft Edge.
+
+### Hasil Akhir Pemeriksaan
+
+| Pemeriksaan                                 | Hasil                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| Oxfmt format check                          | Lulus (`bun run format:check`)                                           |
+| Oxlint dengan deny-warnings                 | Lulus, tanpa warning/error kode (`bun run lint`)                         |
+| TypeScript strict                           | Lulus (`tsc -b`)                                                         |
+| Pengujian domain/engine/adapter melalui Bun | 24 lulus, 0 gagal; 5.485 assertions (`bun run test`)                     |
+| Build produksi Vite                         | Lulus (`vite build`)                                                     |
+| Playwright pada build produksi              | 16 lulus, 0 gagal: 8 skenario di Google Chrome dan Microsoft Edge        |
+| Screenshot desktop & mobile                 | Ditinjau; layout 1366×768, 768×1024, dan 390×844                         |
+| Aksesibilitas modal Panduan                 | Focus trap, ARIA dialog, tab keyboard, Escape, scroll lock terverifikasi |
+
+Perintah yang dijalankan: `bun run check` dan `bun run test:e2e`.
+
+### Cakupan Domain Tambahan (17 Oktober 2026)
+
+- **Nearest Farthest Insertion (NFI):** Mulai dari node awal dan node terdekat, memilih node di luar tour dengan jarak minimum-ke-tour terbesar, menyisipkan pada sisi dengan delta kenaikan minimum, tie-break deterministik ID dan posisi sisi.
+- **3-OPT Local Search:** Evaluasi triple sisi tidak bersebelahan $(i, j, k)$, 4 rekoneksi valid pembentuk siklus tunggal, perbaikan biaya terbaik (`best improvement`) dengan toleransi $\varepsilon = 10^{-9}$, deterministik, dan penanganan dataset kecil ($N < 6$) tanpa kandidat valid.
+- **Durasi Bertahap (Stage Durations):** Pemisahan waktu milidetik tahap konstruksi, perbaikan awal (2-OPT/3-OPT), dan pencarian metaheuristik, serta total waktu.
+- **Migrasi Sesi v1 ke v2:** Kompatibilitas mundur format sesi IndexedDB; konversi `improve: true -> "2OPT"` dan `false -> "none"` serta pemeliharaan seluruh riwayat 10 run dan trace lama.
+- **Ekspor CSV & JSON:** CSV memuat kolom kategori, metode awal/perbaikan, parameter lengkap ($\alpha, T_{\min}$, seed), durasi bertahap, status, dan rute; JSON memuat snapshot detail run.
+
+### Cakupan Browser E2E
+
+1. **Alur TS → Report Leaderboard → SA → perbandingan CSV & JSON → refresh:** Menjalankan TS, memeriksa leaderboard Report, menjalankan SA dengan snapshot rute identik, mengekspor perbandingan CSV/JSON, dan memverifikasi persistensi sesi setelah reload.
+2. **Eksekusi Eksperimen per Kategori:** Menjalankan Konstruksi (NFI), menjalankan Local Search (3-OPT), dan memverifikasi keduanya tercatat di riwayat dan leaderboard Report dengan kolom yang sesuai.
+3. **Impor Excel Valid:** Pemilihan sheet, pemetaan kolom, preview, unduh template, dan penerapan dataset ke kanvas.
+4. **Impor Invalid:** Menolak data invalid tanpa merusak dataset aktif serta menampilkan detail nomor baris sumber error.
+5. **Responsivitas Komputasi:** Uji batching time-slice (12ms) worker pada dataset besar, jeda/lanjut, pembatalan, dan eksekusi run baru.
+6. **Aksesibilitas Modal Panduan:** Verifikasi pembukaan dialog, focus trap, navigasi panah keyboard antar-tab, Escape, dan penguncian scroll latar belakang.
+7. **Layout Responsif Mobile (390×844):** Tidak ada overflow horizontal halaman maupun dialog modal.
+8. **Resiliensi Penyimpanan:** Penanganan sesi korup dan kegagalan IndexedDB tanpa menyebabkan aplikasi crash.
+
+---
+
+## Verifikasi Web MVP Sebelumnya (8 Oktober 2026)
 
 Tanggal: 8 Oktober 2026. Lingkungan: Windows, Bun 1.4.2, Node.js 22.22.0.
 Browser: Google Chrome 154.0.8037.98 dan Microsoft Edge 154.0.4258.62.
 
-## Hasil akhir
-
-| Pemeriksaan                                  | Hasil                                                                 |
-| -------------------------------------------- | --------------------------------------------------------------------- |
-| Oxfmt format check                           | Lulus                                                                 |
-| Oxlint dengan deny-warnings                  | Lulus, tanpa warning/error kode                                       |
-| TypeScript strict                            | Lulus                                                                 |
-| Pengujian domain/adapter/reducer melalui Bun | 22 lulus, 0 gagal; 5.385 assertions                                   |
-| Build produksi Vite                          | Lulus                                                                 |
-| Playwright pada build produksi               | 18 lulus, 0 gagal: 9 skenario di Chrome dan Edge                      |
-| Screenshot desktop/mobile                    | Ditinjau; layout 1365×900 dan 390×844                                 |
-| Kontras teks/kontrol utama                   | Sampel warna foreground/background terhitung ≥ 4,5:1 di kedua browser |
-
-Perintah yang dijalankan: `bun run check` dan `bun run test:e2e`.
-Playwright membangun aplikasi produksi dan menguji server preview pada port 4173.
-Warning NO_COLOR/FORCE_COLOR berasal dari environment runner; pemeriksaan kode sendiri bersih.
-
-## Cakupan domain
-
-- Validasi dataset, ID duplikat, ukuran 3–100, koordinat finite/berimpit, overflow, dan invariant route.
-- Matriks simetris, diagonal nol, biaya route tertutup, serta konfigurasi parameter invalid.
-- Brute-force independen untuk 120 tour fixture enam node; optimum 24,686074230319797 unit.
-- NN/NI dengan titik awal berbeda dan tie-break deterministik; 2-OPT memperbaiki crossing.
-- Seluruh delta 2-OPT pada 120 tour cocok dengan biaya yang dihitung langsung dari koordinat.
-- Tabu tenure inklusif, aspiration untuk kandidat tabu, kenaikan current, best monotonic, no-eligible.
-- Acceptance SA, cooling/minimum temperature, seed reproducible, dan rekonstruksi seluruh trace fixture.
-- Tiga node/neighborhood kosong serta cancellation yang mempertahankan best-so-far.
-- Workbook binary, format .xlsx palsu, penolakan truncation, mapping header dan nomor baris error.
-- Sesi valid/korup, batas 10 run, pesan worker lama diabaikan, dan metadata/quoting CSV.
-
-## Cakupan browser
-
-1. TS → detail iterasi → JSON yang dibaca kembali → SA dengan kondisi awal sama → comparison → CSV → refresh riwayat.
-2. Draft tidak mengubah dataset aktif, validasi duplikat, penerapan dataset, NI + 2-OPT, dan reset contoh.
-3. Impor Excel valid, pemilihan sheet/kolom, preview, template download, dan penerapan impor.
-4. Impor invalid tidak mengganti dataset dan menampilkan nomor baris sumber.
-5. 100 node: UI tetap dapat digunakan, pause membekukan hasil, resume, cancel, serta run berikutnya.
-6. Sesi korup kembali ke contoh dan dapat disimpan ulang melalui tindakan eksplisit.
-7. Keyboard skip link/accordion/tab arrows, reduced motion, dan layout kecil tanpa overflow halaman.
-8. IndexedDB tidak tersedia tetap memungkinkan run; kegagalan worker ditampilkan dan run baru dapat dimulai.
-9. Kontras teks/kontrol utama dihitung dari style browser.
-
-Snapshot, screenshot, dan trace gagal/diagnostik diletakkan Playwright pada `test-results/`.
-Folder itu merupakan artefak pengujian, bukan source aplikasi.
-
-## Batas bukti dan pekerjaan berikutnya
-
-Pengujian ini memverifikasi implementasi MVP dengan contoh sintetis. Tidak mengonfirmasi dataset,
-formulasi α/λ, rubrik, atau referensi resmi dosen yang belum tersedia.
-Tidak mengklaim heuristik selalu optimal. Pengujian responsivitas 100 node mencakup lifecycle
-pause/resume/cancel dan run baru, bukan benchmark seluruh konfigurasi 10.000 iterasi.
-Kontras diperiksa pada teks/kontrol utama; audit aksesibilitas menyeluruh dengan screen reader belum dilakukan.
-
-Review manusia atas guide/demo, teori 3-OPT, ilustrasi akademik lengkap, pitch deck, Tauri,
-hosting publik, dan release repository tetap mengikuti roadmap setelah MVP.
-Penyimpanan bergantung pada browser/origin dan tidak memulihkan run yang masih berjalan saat tab ditutup.
+Pemeriksaan awal MVP mencakup 22 tes domain dan 18 run Playwright pada 9 skenario awal MVP. Hasil awal tersebut telah diintegrasikan dan diperbarui dengan cakupan fitur lengkap per 17 Oktober 2026.

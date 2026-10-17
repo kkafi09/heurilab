@@ -13,8 +13,13 @@ import {
   applyMove,
   moveDelta,
   moveEdges,
+  nearestFarthestInsertion,
   nearestInsertion,
   nearestNeighbor,
+  threeOptDelta,
+  threeOptDescent,
+  threeOptDescentDetailed,
+  threeOptTriples,
   twoOptDescent,
   twoOptMoves,
 } from "../../src/domain/algorithms/baselines";
@@ -186,9 +191,65 @@ describe("baseline dan 2-OPT", () => {
       result = twoOptDescent(initial, matrix);
     expect(routeCost(result, matrix)).toBeLessThan(routeCost(initial, matrix));
     expect(routeCost(result, matrix)).toBeCloseTo(oracle, 9);
-    expect(makeInitialRoute(EXAMPLE, { ...defaultConfig, improve: true })).toEqual(
+    expect(makeInitialRoute(EXAMPLE, { ...defaultConfig, improve: "2OPT" })).toEqual(
       twoOptDescent(nearestNeighbor(EXAMPLE.nodes, matrix, 0), matrix),
     );
+  });
+  test("NFI deterministik, valid, mempertahankan start pada posisi awal, dan tie-break ID", () => {
+    for (let start = 0; start < 6; start++) {
+      const route = nearestFarthestInsertion(EXAMPLE.nodes, matrix, start);
+      expect(validateRoute(route, 6)).toBe(true);
+      expect(route[0]).toBe(start);
+      expect(route).toEqual(nearestFarthestInsertion(EXAMPLE.nodes, matrix, start));
+      expect(routeCost(route, matrix)).toBeCloseTo(independentCost(route), 10);
+    }
+    // Test tie-break behavior
+    const nodes = [
+      { id: "A", x: 0, y: 0 },
+      { id: "C", x: 10, y: 0 },
+      { id: "B", x: -10, y: 0 },
+    ];
+    const nfiRoute = nearestFarthestInsertion(nodes, distanceMatrix(nodes), 0);
+    expect(nfiRoute[0]).toBe(0);
+    expect(validateRoute(nfiRoute, 3)).toBe(true);
+  });
+  test("3-OPT: triples kosong untuk N < 6, evaluasi 7 rekoneksi deterministik dan valid", () => {
+    expect(threeOptTriples(5)).toEqual([]);
+    const triples = threeOptTriples(6);
+    expect(triples.length).toBeGreaterThan(0);
+
+    const initial = [0, 2, 4, 1, 3, 5];
+    const detailed = threeOptDescentDetailed(initial, matrix);
+    expect(detailed.route[0]).toBe(0);
+    expect(validateRoute(detailed.route, 6)).toBe(true);
+    expect(routeCost(detailed.route, matrix)).toBeLessThan(routeCost(initial, matrix));
+    expect(detailed.steps).toBeGreaterThan(0);
+    expect(detailed.evaluations).toBeGreaterThan(0);
+
+    // On optimal route (NN from 0), 3-OPT yields 0 improvement and stops with no-improvement
+    const optimalRoute = nearestNeighbor(EXAMPLE.nodes, matrix, 0);
+    const optDetailed = threeOptDescentDetailed(optimalRoute, matrix);
+    expect(optDetailed.steps).toBe(0);
+    expect(optDetailed.stopReason).toBe("no-improvement");
+    expect(optDetailed.route).toEqual(optimalRoute);
+
+    const simpleDescent = threeOptDescent(initial, matrix);
+    expect(simpleDescent).toEqual(detailed.route);
+
+    // Verify threeOptDelta for triple
+    const [ti, tj, tk] = triples[0]!;
+    for (let c = 1; c <= 7; c++) {
+      const d = threeOptDelta(
+        initial,
+        { i: ti, j: tj, k: tk, caseType: c as 1 | 2 | 3 | 4 | 5 | 6 | 7 },
+        matrix,
+      );
+      expect(Number.isFinite(d)).toBe(true);
+    }
+
+    // Verify makeInitialRoute with 3-OPT
+    const route3Opt = makeInitialRoute(EXAMPLE, { ...defaultConfig, improve: "3OPT" });
+    expect(validateRoute(route3Opt, 6)).toBe(true);
   });
 });
 describe("Tabu Search", () => {
@@ -377,26 +438,61 @@ describe("impor, penyimpanan, dan ekspor", () => {
     expect(previewSheet(sheet, mapping).issues[0]!.row).toBe(4);
     expect(previewSheet(sheet, { id: 0, x: 0, y: 2 }).issues.length).toBe(1);
   });
-  test("sesi valid dapat dipulihkan dan sesi korup ditolak", () => {
-    const run = execute({ algorithm: "SA", maxIterations: 10 }),
-      session = { version: 1, dataset: EXAMPLE, config: defaultConfig, runs: [run] };
-    expect(parseSession(session).runs[0]!.bestRoute).toEqual(run.bestRoute);
+  test("sesi valid dapat dipulihkan dan sesi korup ditolak, serta v1 dimigrasi ke v2", () => {
+    const run = execute({ algorithm: "SA", maxIterations: 10 });
+    // Legacy v1 session with improve: true
+    const legacySession = {
+      version: 1,
+      dataset: EXAMPLE,
+      config: { ...defaultConfig, improve: true },
+      runs: [{ ...run, config: { ...run.config, improve: true } }],
+    };
+    const parsedV1 = parseSession(legacySession);
+    expect(parsedV1.version).toBe(2);
+    expect(parsedV1.config.improve).toBe("2OPT");
+    expect(parsedV1.runs[0]!.config.improve).toBe("2OPT");
+    expect(parsedV1.runs[0]!.category).toBe("metaheuristic");
+    expect(parsedV1.runs[0]!.bestRoute).toEqual(run.bestRoute);
+
+    // Legacy v1 session with improve: false
+    const legacySessionFalse = {
+      version: 1,
+      dataset: EXAMPLE,
+      config: { ...defaultConfig, improve: false },
+      runs: [{ ...run, config: { ...run.config, improve: false } }],
+    };
+    const parsedV1False = parseSession(legacySessionFalse);
+    expect(parsedV1False.config.improve).toBe("none");
+    expect(parsedV1False.runs[0]!.config.improve).toBe("none");
+
+    // Valid v2 session
+    const sessionV2 = { version: 2, dataset: EXAMPLE, config: defaultConfig, runs: [run] };
+    expect(parseSession(sessionV2).runs[0]!.bestRoute).toEqual(run.bestRoute);
+
+    // Corrupt sessions
     expect(() => parseSession({ version: 9 })).toThrow();
     expect(() =>
       parseSession({
-        ...session,
+        ...sessionV2,
         runs: [{ ...run, trace: [{ ...run.trace[0], move: { i: 99, j: 100 } }] }],
       }),
     ).toThrow();
     expect(() =>
-      parseSession({ ...session, config: { ...defaultConfig, maxIterations: NaN } }),
+      parseSession({ ...sessionV2, config: { ...defaultConfig, maxIterations: NaN } }),
     ).toThrow();
   });
-  test("CSV memuat konfigurasi, unit, rute, dan quoting aman", () => {
+  test("CSV memuat kategori, durasi fase, konfigurasi, unit, rute, dan quoting aman", () => {
     const run = execute();
     run.dataset = { ...run.dataset, name: '=demo,"quoted"' };
+    run.durations = { constructionMs: 2.5, preparationMs: 1.2, searchMs: 15.0, totalMs: 18.7 };
     const csv = comparisonCsv([run]);
+    expect(csv).toContain("category");
+    expect(csv).toContain("metaheuristic");
     expect(csv).toContain("parameters");
+    expect(csv).toContain("construction_time_ms");
+    expect(csv).toContain("preparation_time_ms");
+    expect(csv).toContain("search_time_ms");
+    expect(csv).toContain("total_duration_ms");
     expect(csv).toContain("euclidean");
     expect(csv).toContain("unit koordinat");
     expect(csv).toContain("A →");

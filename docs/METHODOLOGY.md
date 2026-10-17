@@ -1,80 +1,58 @@
-# Metodologi HeuriLab Web MVP
+# Metodologi HeuriLab
 
-## Objective dan data
+## Objective dan Data
 
-Tujuan TSP adalah meminimalkan total jarak tour tertutup yang mengunjungi setiap node tepat sekali.
-Untuk koordinat planar, `d(a,b) = hypot(ax − bx, ay − by)` dan
-`cost(r) = Σ d(r[i], r[(i+1) mod n])`. Semua metode menggunakan matriks dan fungsi biaya yang sama.
+Tujuan Traveling Salesman Problem (TSP) adalah meminimalkan total jarak tour tertutup yang mengunjungi setiap titik (node) tepat satu kali dan kembali ke titik awal.
+Untuk koordinat planar, jarak antar titik dihitung menggunakan metrik Euclidean:
+`d(a,b) = √((ax − bx)² + (ay − by)²)`
+dan total biaya tour tertutup dinyatakan oleh:
+`cost(r) = Σ d(r[i], r[(i+1) mod n])`.
+Semua metode menggunakan matriks jarak simetris Euclidean dan fungsi evaluasi biaya yang identik.
 
-Route internal menyimpan indeks unik tanpa penutupan duplikat. Titik awal tetap selama 2-OPT.
-Tie node konstruktif berdasarkan ID; tie move/posisi berdasarkan urutan indeks.
-Epsilon 1e-9 membedakan improvement dari noise numerik. UI membulatkan tiga desimal,
-sementara export dan perhitungan menyimpan presisi penuh.
+Route internal menyimpan indeks titik tanpa duplikasi penutupan. Titik awal tetap berada pada posisi indeks 0 sepanjang perbaikan.
+Tie-break pemilihan titik konstruktif berlandaskan perbandingan ID node secara deterministik; tie-break posisi penambahan atau move berlandaskan urutan indeks terkecil.
+Konstanta `EPSILON = 1e-9` digunakan untuk membedakan perbaikan nyata dari galat pembulatan floating point numerik. Antarmuka menampilkan angka hingga 3 digit desimal, sedangkan komputasi internal dan ekspor menyimpan presisi numerik penuh.
 
-## Constructive dan local search
+## Tiga Kategori Eksperimen Mandiri
 
-**Nearest Neighbor:** mulai dari node terpilih, pilih node belum dikunjungi dengan jarak minimum,
-ulangi sampai seluruh node dikunjungi, lalu tutup tour.
+HeuriLab mendukung pelaksanaan metode secara mandiri (satu per satu) untuk membangun perbandingan yang adil di Report:
 
-**Nearest Insertion:** mulai dari node terpilih dan tetangga terdekat. Pilih node di luar tour
-yang jarak minimumnya terhadap anggota tour paling kecil. Sisipkan pada edge `(a,b)` yang meminimalkan
-`d(a,new) + d(new,b) − d(a,b)`. Tie insertion memakai posisi edge paling awal.
+1. **Pembentukan Solusi Awal (Konstruksi):**
+   Membentuk rute awal dari himpunan titik koordinat secara deterministik tanpa move pertukaran rute:
+   - **Nearest Neighbor (NN):** Mulai dari node awal terpilih, memilih titik terdekat yang belum dikunjungi pada tiap langkah hingga seluruh titik masuk ke tour.
+   - **Nearest Insertion (NI):** Mulai dari subtour dua node (node awal dan tetangga terdekatnya). Memilih titik di luar tour dengan jarak minimum ke anggota tour terkecil, lalu menyisipkannya pada sisi `(a,b)` yang meminimalkan kenaikan biaya `d(a,new) + d(new,b) − d(a,b)`.
+   - **Nearest Farthest Insertion (NFI):** Mulai dari subtour dua node (node awal dan tetangga terdekatnya). Memilih titik di luar tour yang memiliki jarak minimum ke subtour paling besar (paling jauh dari subtour saat ini), kemudian menyisipkannya pada sisi `(a,b)` dengan kenaikan biaya terkecil.
 
-**2-OPT:** hapus dua edge tidak bersebelahan `(a,b)` dan `(c,d)`, tambahkan `(a,c)` serta `(b,d)`,
-dan balik segmen di antara keduanya. Delta `d(a,c)+d(b,d)−d(a,b)−d(c,d)` dievaluasi dalam O(1).
-Best improvement memilih delta negatif terbaik; berhenti tanpa perbaikan atau pada 10.000 move.
-Reversal seluruh tour dan move edge bersebelahan dikecualikan. Tiga node memiliki neighborhood kosong.
+2. **Local Search (Pencarian Lokal):**
+   Menerima rute dasar (dari NN, NI, atau NFI) tanpa perbaikan awal, lalu menerapkan algoritma descent hingga mencapai optimum lokal (tidak ada move yang memperbaiki) atau batas langkah 10.000 tercapai:
+   - **2-OPT Descent:** Memilih dua sisi tidak bersebelahan, membalik urutan segmen di antara keduanya, dan menerima move dengan delta negatif terbaik (best improvement).
+   - **3-OPT Descent:** Memilih tiga sisi tidak bersebelahan `(i, i+1)`, `(j, j+1)`, `(k, k+1)` yang membagi tour menjadi segmen A, B, C, D. Mengevaluasi seluruh 7 kombinasi rekoneksi yang membentuk tour tunggal valid (tanpa subtour terputus). Menerima rekoneksi dengan perbaikan delta terbaik per langkah. Jika $N < 6$, neighborhood 3-OPT kosong dan rute selesai tanpa perubahan.
 
-## Tabu Search
+3. **Metaheuristik:**
+   Menjalankan algoritma stochastic atau memori pencarian untuk meloloskan diri dari optimum lokal:
+   - **Tabu Search (TS):** Mengevaluasi seluruh neighborhood 2-OPT pada tiap iterasi dan memilih kandidat eligible terbaik (meskipun lebih buruk dari solusi saat ini). Sisi undirected yang dihapus pada iterasi $k$ dicatat dalam tabu list dan dilarang untuk ditambahkan kembali hingga iterasi $k + \text{tenure}$ secara inklusif. Aturan aspiration membolehkan move tabu apabila menghasilkan biaya yang lebih baik daripada solusi terbaik global (_best-so-far_). Solusi terbaik (_best-so-far_) dicatat terpisah dan monotonik tidak pernah memburuk. Default tenure: 7 (rentang 1–100).
+   - **Simulated Annealing (SA):** Pada tiap iterasi, memilih satu move 2-OPT secara acak menggunakan PRNG deterministik Mulberry32 dengan seed tertentu. Jika kandidat memiliki $\Delta \le 0$, solusi baru selalu diterima. Jika $\Delta > 0$, solusi baru diterima dengan probabilitas $p = \exp(-\Delta / T)$. Suhu awal $T_0$ diturunkan secara geometris melalui cooling rate $\alpha$ ($T_{k+1} = \alpha \cdot T_k$) setelah setiap blok iterasi per suhu selesai. Pencarian berhenti jika batas iterasi tercapai, suhu mencapai suhu minimum $T_{\min}$, atau dibatalkan pengguna.
 
-TS mengevaluasi seluruh neighborhood 2-OPT current dan memilih kandidat eligible termurah,
-termasuk kandidat yang lebih buruk dari current. Edge undirected yang dihapus pada iterasi k
-menjadi tabu untuk ditambahkan kembali selama k+1 sampai k+tenure, inklusif.
-Kandidat tabu menjadi eligible melalui aspiration jika biayanya lebih kecil dari best-so-far minus epsilon.
-Best-so-far diperbarui hanya ketika current membaik.
+## Pembagian Durasi Komputasi (Stage Durations)
 
-Default tenure 7, valid 1–100. Aspiration selalu aktif pada MVP. Alasan berhenti:
-batas iterasi, tidak ada kandidat eligible, neighborhood kosong, atau cancel.
-Tidak ada kandidat eligible menghasilkan run selesai dengan best yang tersedia, bukan error.
+Setiap run mencatat durasi komputasi per tahap secara terpisah untuk transparansi analisis:
 
-## Simulated Annealing
+- **Konstruksi ($t\_{\text{const}}$):** Waktu pembuatan rute dasar dengan NN, NI, atau NFI.
+- **Preparasi ($t\_{\text{prep}}$):** Waktu perbaikan awal dengan 2-OPT atau 3-OPT sebelum metaheuristik dimulai (jika opsi perbaikan diaktifkan).
+- **Pencarian ($t\_{\text{search}}$):** Waktu iterasi inti pencarian metaheuristik atau descent local search.
+- **Total ($t\_{\text{total}}$):** Akumulasi total waktu aktif komputasi di worker (mengecualikan jeda/pause).
 
-SA memilih move 2-OPT secara uniform melalui RNG Mulberry32 ber-seed uint32.
-Untuk delta ≤ 0, kandidat diterima dan random draw acceptance tidak diperlukan.
-Untuk delta > 0, `p = exp(−delta/T)` dan kandidat diterima jika `draw < p`.
-Current dapat memburuk; best-so-far hanya diperbarui jika membaik.
+## Evaluasi dan Reproducibility
 
-Default suhu awal 100, cooling rate 0,95, 20 iterasi per suhu, suhu minimum 0,001.
-Suhu dikalikan cooling rate setelah blok iterasi per suhu selesai. Cooling rate valid `0 < rate < 1`;
-suhu finite positif; minimum lebih kecil dari initial. Alasan berhenti: batas iterasi, suhu minimum,
-neighborhood kosong, atau cancel. Seed default 42, rentang 0–4.294.967.295.
+- **TS:** Bersifat deterministik murni untuk konfigurasi, dataset, dan rute awal yang sama.
+- **SA:** Bersifat reproducible murni bila dijalankan dengan seed, suhu awal, cooling rate $\alpha$, iterasi per suhu, dan rute awal yang sama.
+- Evaluasi kandidat TS dan SA memiliki makna komputasi berbeda: satu iterasi TS mengevaluasi seluruh neighborhood 2-OPT ($O(N^2)$ kandidat), sedangkan satu iterasi SA mengevaluasi tepat satu kandidat acak ($O(1)$).
 
-Cooling rate dipakai secara eksplisit; tidak diasumsikan identik dengan α formulasi tugas dosen.
-λ belum didefinisikan dan tidak menjadi kontrol aktif.
+## Fixture Standar Enam Titik
 
-## Trace, perbandingan, dan reproducibility
+Fixture uji baku HeuriLab di `data/example-six.json`:
 
-Trace mencatat iteration, move, delta, candidate/current/best cost, acceptance, serta alasan.
-TS menambahkan tabu status, aspiration, dan tabu list/expiry; SA menambahkan suhu, probability, dan draw.
-Route tiap iterasi direkonstruksi dari initial dan move accepted. JSON menyediakan snapshot dataset,
-konfigurasi, initial/current/best route, trace, status, alasan berhenti, serta durasi.
-
-TS deterministik; SA reproducible untuk dataset, route awal, konfigurasi, dan seed yang sama.
-Durasi tidak termasuk jaminan reproducibility dan mengecualikan waktu paused.
-Counter evaluations adalah jumlah kandidat yang diperiksa; counter iterations adalah move yang diproses.
-TS dapat mengevaluasi kandidat tambahan pada pemeriksaan akhir tanpa kandidat eligible.
-
-Perbandingan memeriksa snapshot dataset, unit Euclidean, initial route, dan budget iterasi.
-Perbedaan diberi label. Kesamaan kondisi tidak menjamin kesamaan beban komputasi: TS memeriksa
-seluruh neighborhood, SA satu kandidat. Run cancelled memuat hasil parsial.
-
-## Fixture dan batas akademik
-
-Contoh: A(0,0), B(4,0), C(7,3), D(5,7), E(1,6), F(−2,3). Start A.
-NN menghasilkan A → F → E → D → C → B → A dengan biaya 24,686074230319797.
-Oracle enumerasi 120 tour yang berawal di A mengonfirmasi optimum fixture ini.
-Rute reverse mempunyai biaya sama karena matriks simetris.
-
-Hasil fixture tidak membuktikan optimum algoritma untuk input lain. Tidak ada klaim satu metode
-selalu lebih baik. Implementasi mendukung Euclidean planar; matriks resmi/satuan geografis
-dan formulasi tugas perlu ditinjau ketika sumber akademik tersedia.
+- Node: A(0,0), B(4,0), C(7,3), D(5,7), E(1,6), F(-2,3)
+- Satuan: unit koordinat planar
+- Solusi NN dari A: A → F → E → D → C → B → A dengan panjang 24.686074230319797.
+- Solusi tersebut telah diverifikasi independen oleh oracle permutasi 120 tour tertutup sebagai solusi optimum global. Perbaikan 0% pada fixture ini adalah sah dan membuktikan bahwa solusi awal sudah mencapai titik optimum.

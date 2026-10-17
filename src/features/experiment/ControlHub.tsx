@@ -11,9 +11,16 @@ import {
   History,
   Trash2,
 } from "lucide-react";
-import { Button, Field, formatNumber } from "../../components/ui";
+import { Button, Field, formatNumber, stopLabels } from "../../components/ui";
 import { Select } from "../../components/ui/select";
-import { validateConfig, type RunConfig, type RunResult } from "../../domain/algorithms/experiment";
+import {
+  validateConfig,
+  type ExperimentCategory,
+  type ImprovementMethod,
+  type InitialMethod,
+  type RunConfig,
+  type RunResult,
+} from "../../domain/algorithms/experiment";
 import type { Dataset } from "../../domain/tsp/model";
 
 export function ControlHub({
@@ -75,6 +82,22 @@ export function ControlHub({
     </Field>
   );
 
+  const setCategory = (category: ExperimentCategory) => {
+    let algorithm = config.algorithm;
+    if (category === "construction") {
+      algorithm = config.initialMethod;
+    } else if (category === "local-search") {
+      algorithm = "2OPT";
+    } else if (category === "metaheuristic") {
+      algorithm = algorithm === "SA" ? "SA" : "TS";
+    }
+    onConfigChange({
+      ...config,
+      category,
+      algorithm,
+    });
+  };
+
   const improvement = run
     ? run.initialCost === 0
       ? 0
@@ -119,99 +142,285 @@ export function ControlHub({
 
           {/* Form Fields */}
           <div className="space-y-3">
-            <div className="two-fields">
-              <Field label="Solusi Awal">
-                <Select
-                  disabled={busy}
-                  value={config.initialMethod}
-                  options={[
-                    {
-                      value: "NN",
-                      label: "Nearest Neighbor",
-                      description: "Pilih titik terdekat berikutnya",
-                    },
-                    {
-                      value: "NI",
-                      label: "Nearest Insertion",
-                      description: "Sisipkan node dengan delta terendah",
-                    },
-                  ]}
-                  onChange={(val) =>
-                    onConfigChange({ ...config, initialMethod: val as "NN" | "NI" })
-                  }
-                  ariaLabel="Pilih solusi awal"
-                />
-              </Field>
-
-              <Field label="Titik Awal">
-                <Select
-                  disabled={busy}
-                  value={config.startId}
-                  options={dataset.nodes.map((node) => ({
-                    value: node.id,
-                    label: `Node ${node.id} (${node.x}, ${node.y})`,
-                  }))}
-                  onChange={(val) => onConfigChange({ ...config, startId: val })}
-                  ariaLabel="Pilih titik awal tour"
-                />
-              </Field>
-            </div>
-
-            <label className="checkbox-field">
-              <input
-                type="checkbox"
-                disabled={busy}
-                checked={config.improve}
-                onChange={(e) => onConfigChange({ ...config, improve: e.target.checked })}
-              />
-              <span>Perbaiki solusi awal dengan 2-OPT</span>
-            </label>
-
-            <Field label="Metode Optimasi">
+            {/* Category Selector */}
+            <Field label="Jenis Eksperimen">
               <Select
                 disabled={busy}
-                value={config.algorithm}
+                value={config.category}
                 options={[
                   {
-                    value: "TS",
-                    label: "Tabu Search (TS)",
-                    description: "Pencarian 2-OPT dengan memori tabu list & aspiration",
+                    value: "metaheuristic",
+                    label: "Metaheuristik (TS / SA)",
+                    description: "Optimasi dengan Tabu Search atau Simulated Annealing",
                   },
                   {
-                    value: "SA",
-                    label: "Simulated Annealing (SA)",
-                    description: "Pendinginan termal & probabilitas exp(-Δ/T)",
+                    value: "local-search",
+                    label: "Local Search (2-OPT / 3-OPT)",
+                    description: "Perbaikan rute dasar menggunakan local search descent",
+                  },
+                  {
+                    value: "construction",
+                    label: "Pembentukan Solusi Awal",
+                    description: "Konstruksi rute dasar (NN, NI, atau NFI)",
                   },
                 ]}
-                onChange={(val) => onConfigChange({ ...config, algorithm: val as "TS" | "SA" })}
-                ariaLabel="Pilih metode optimasi"
+                onChange={(val) => setCategory(val as ExperimentCategory)}
+                ariaLabel="Pilih jenis eksperimen"
               />
             </Field>
 
-            {config.algorithm === "TS" ? (
-              <div className="algorithm-subpanel">
-                <span className="panel-sublabel">Parameter Tabu Search</span>
-                {numericField("tenure", "Tabu tenure", 1, 50)}
-                <div className="text-xs text-slate-500 bg-white/70 p-2 rounded border border-slate-200">
-                  <strong>Aspiration:</strong> Aktif otomatis bila kandidat tabu mengalahkan
-                  best-so-far.
-                </div>
-              </div>
-            ) : (
-              <div className="algorithm-subpanel">
-                <span className="panel-sublabel">Parameter Simulated Annealing</span>
+            {/* 1. Construction Fields */}
+            {config.category === "construction" && (
+              <div className="space-y-3">
                 <div className="two-fields">
-                  {numericField("initialTemperature", "Suhu Awal (T₀)", 0.001, 10000, "0.1")}
-                  {numericField("coolingRate", "Cooling Rate (α)", 0.0001, 0.9999, "0.01")}
-                </div>
-                <div className="two-fields">
-                  {numericField("iterationsPerTemperature", "Iter/Suhu", 1, 1000)}
-                  {numericField("seed", "RNG Seed", 0, 1000000)}
+                  <Field label="Metode Konstruktif">
+                    <Select
+                      disabled={busy}
+                      value={config.initialMethod}
+                      options={[
+                        {
+                          value: "NN",
+                          label: "Nearest Neighbor (NN)",
+                          description: "Pilih titik terdekat berikutnya",
+                        },
+                        {
+                          value: "NI",
+                          label: "Nearest Insertion (NI)",
+                          description: "Sisipkan node terdekat dengan delta minimal",
+                        },
+                        {
+                          value: "NFI",
+                          label: "Nearest Farthest Insertion (NFI)",
+                          description: "Sisipkan node terjauh dari tour",
+                        },
+                      ]}
+                      onChange={(val) => {
+                        const m = val as InitialMethod;
+                        onConfigChange({ ...config, initialMethod: m, algorithm: m });
+                      }}
+                      ariaLabel="Pilih metode konstruktif"
+                    />
+                  </Field>
+
+                  <Field label="Titik Awal">
+                    <Select
+                      disabled={busy}
+                      value={config.startId}
+                      options={dataset.nodes.map((node) => ({
+                        value: node.id,
+                        label: `Node ${node.id} (${node.x}, ${node.y})`,
+                      }))}
+                      onChange={(val) => onConfigChange({ ...config, startId: val })}
+                      ariaLabel="Pilih titik awal tour"
+                    />
+                  </Field>
                 </div>
               </div>
             )}
 
-            {numericField("maxIterations", "Batas Iterasi Maksimal", 1, 10000)}
+            {/* 2. Local Search Fields */}
+            {config.category === "local-search" && (
+              <div className="space-y-3">
+                <div className="two-fields">
+                  <Field label="Rute Dasar">
+                    <Select
+                      disabled={busy}
+                      value={config.initialMethod}
+                      options={[
+                        {
+                          value: "NN",
+                          label: "Nearest Neighbor (NN)",
+                          description: "Rute dasar NN",
+                        },
+                        {
+                          value: "NI",
+                          label: "Nearest Insertion (NI)",
+                          description: "Rute dasar NI",
+                        },
+                        {
+                          value: "NFI",
+                          label: "Nearest Farthest Insertion (NFI)",
+                          description: "Rute dasar NFI",
+                        },
+                      ]}
+                      onChange={(val) =>
+                        onConfigChange({ ...config, initialMethod: val as InitialMethod })
+                      }
+                      ariaLabel="Pilih rute dasar konstruksi"
+                    />
+                  </Field>
+
+                  <Field label="Titik Awal">
+                    <Select
+                      disabled={busy}
+                      value={config.startId}
+                      options={dataset.nodes.map((node) => ({
+                        value: node.id,
+                        label: `Node ${node.id} (${node.x}, ${node.y})`,
+                      }))}
+                      onChange={(val) => onConfigChange({ ...config, startId: val })}
+                      ariaLabel="Pilih titik awal tour"
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Metode Local Search">
+                  <Select
+                    disabled={busy}
+                    value={config.algorithm}
+                    options={[
+                      {
+                        value: "2OPT",
+                        label: "2-OPT Descent",
+                        description: "Pembalikan dua sisi hingga tidak ada perbaikan",
+                      },
+                      {
+                        value: "3OPT",
+                        label: "3-OPT Descent",
+                        description: "Evaluasi 7 rekoneksi tiga sisi tidak bersebelahan",
+                      },
+                    ]}
+                    onChange={(val) =>
+                      onConfigChange({
+                        ...config,
+                        algorithm: val as "2OPT" | "3OPT",
+                        improve: val as "2OPT" | "3OPT",
+                      })
+                    }
+                    ariaLabel="Pilih metode local search"
+                  />
+                </Field>
+              </div>
+            )}
+
+            {/* 3. Metaheuristic Fields */}
+            {config.category === "metaheuristic" && (
+              <div className="space-y-3">
+                <div className="two-fields">
+                  <Field label="Solusi Awal">
+                    <Select
+                      disabled={busy}
+                      value={config.initialMethod}
+                      options={[
+                        {
+                          value: "NN",
+                          label: "Nearest Neighbor (NN)",
+                          description: "Pilih titik terdekat berikutnya",
+                        },
+                        {
+                          value: "NI",
+                          label: "Nearest Insertion (NI)",
+                          description: "Sisipkan node terdekat dengan delta minimal",
+                        },
+                        {
+                          value: "NFI",
+                          label: "Nearest Farthest Insertion (NFI)",
+                          description: "Sisipkan node terjauh dari tour",
+                        },
+                      ]}
+                      onChange={(val) =>
+                        onConfigChange({ ...config, initialMethod: val as InitialMethod })
+                      }
+                      ariaLabel="Pilih solusi awal"
+                    />
+                  </Field>
+
+                  <Field label="Titik Awal">
+                    <Select
+                      disabled={busy}
+                      value={config.startId}
+                      options={dataset.nodes.map((node) => ({
+                        value: node.id,
+                        label: `Node ${node.id} (${node.x}, ${node.y})`,
+                      }))}
+                      onChange={(val) => onConfigChange({ ...config, startId: val })}
+                      ariaLabel="Pilih titik awal tour"
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Perbaikan Solusi Awal">
+                  <Select
+                    disabled={busy}
+                    value={config.improve}
+                    options={[
+                      {
+                        value: "none",
+                        label: "Tidak ada (Rute Dasar Langsung)",
+                        description: "Gunakan rute konstruktif tanpa perbaikan awal",
+                      },
+                      {
+                        value: "2OPT",
+                        label: "Perbaiki dengan 2-OPT",
+                        description: "Jalankan 2-OPT descent sebelum metaheuristik",
+                      },
+                      {
+                        value: "3OPT",
+                        label: "Perbaiki dengan 3-OPT",
+                        description: "Jalankan 3-OPT descent sebelum metaheuristik",
+                      },
+                    ]}
+                    onChange={(val) =>
+                      onConfigChange({ ...config, improve: val as ImprovementMethod })
+                    }
+                    ariaLabel="Pilih perbaikan solusi awal"
+                  />
+                </Field>
+
+                <Field label="Metode Optimasi">
+                  <Select
+                    disabled={busy}
+                    value={config.algorithm}
+                    options={[
+                      {
+                        value: "TS",
+                        label: "Tabu Search (TS)",
+                        description: "Pencarian 2-OPT dengan memori tabu list & aspiration",
+                      },
+                      {
+                        value: "SA",
+                        label: "Simulated Annealing (SA)",
+                        description: "Pendinginan termal & probabilitas exp(-Δ/T)",
+                      },
+                    ]}
+                    onChange={(val) => onConfigChange({ ...config, algorithm: val as "TS" | "SA" })}
+                    ariaLabel="Pilih metode optimasi"
+                  />
+                </Field>
+
+                {config.algorithm === "TS" ? (
+                  <div className="algorithm-subpanel">
+                    <span className="panel-sublabel">Parameter Tabu Search</span>
+                    {numericField("tenure", "Tabu tenure", 1, 100)}
+                    <div className="text-xs text-slate-500 bg-white/70 p-2 rounded border border-slate-200">
+                      <strong>Aspiration:</strong> Aktif otomatis bila kandidat tabu mengalahkan
+                      best-so-far.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="algorithm-subpanel">
+                    <span className="panel-sublabel">Parameter Simulated Annealing</span>
+                    <div className="two-fields">
+                      {numericField("initialTemperature", "Suhu Awal (T₀)", 0.001, 10000, "0.1")}
+                      {numericField("coolingRate", "Cooling Rate (α)", 0.0001, 0.9999, "0.01")}
+                    </div>
+                    <div className="two-fields">
+                      {numericField("iterationsPerTemperature", "Iter/Suhu", 1, 10000)}
+                      {numericField(
+                        "minimumTemperature",
+                        "Suhu Minimum (T_min)",
+                        0.00001,
+                        1000,
+                        "0.001",
+                      )}
+                    </div>
+                    {numericField("seed", "RNG Seed", 0, 4294967295)}
+                  </div>
+                )}
+
+                {numericField("maxIterations", "Batas Iterasi Maksimal", 1, 10000)}
+              </div>
+            )}
 
             {errors.length > 0 && (
               <ul className="errors-list" role="alert">
@@ -230,7 +439,13 @@ export function ControlHub({
                   className="w-full justify-center"
                 >
                   <Play size={16} />
-                  <span>Jalankan Eksperimen</span>
+                  <span>
+                    {config.category === "construction"
+                      ? "Bentuk Solusi Awal"
+                      : config.category === "local-search"
+                        ? "Jalankan Local Search"
+                        : "Jalankan Metaheuristik"}
+                  </span>
                 </Button>
               ) : (
                 <div className="flex gap-2 w-full">
@@ -258,8 +473,11 @@ export function ControlHub({
                 >
                   <ArrowRightLeft size={14} />
                   <span>
-                    Ulangi dengan{" "}
-                    {config.algorithm === "TS" ? "Simulated Annealing" : "Tabu Search"}
+                    {run.category === "metaheuristic"
+                      ? `Ulangi dengan ${config.algorithm === "TS" ? "Simulated Annealing" : "Tabu Search"}`
+                      : run.category === "local-search"
+                        ? `Ulangi dengan ${config.algorithm === "2OPT" ? "3-OPT" : "2-OPT"}`
+                        : "Bentuk Ulang Rute"}
                   </span>
                 </Button>
               )}
@@ -268,7 +486,14 @@ export function ControlHub({
 
           {/* Live Metrics Snapshot */}
           <div className="live-metrics-box">
-            <span className="box-title">HASIL TERBARU</span>
+            <div className="flex items-center justify-between mb-2">
+              <span className="box-title">HASIL TERBARU</span>
+              {run && (
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                  {stopLabels[run.stopReason] ?? run.stopReason}
+                </span>
+              )}
+            </div>
             <div className="metrics-grid">
               <div className="metric-cell primary">
                 <span className="metric-label">Jarak Terbaik</span>
@@ -278,19 +503,33 @@ export function ControlHub({
 
               <div className="metric-cell">
                 <span className="metric-label">Peningkatan</span>
-                <strong className="metric-value">{run ? `${improvement.toFixed(2)}%` : "—"}</strong>
+                <strong className="metric-value">
+                  {run
+                    ? run.category === "construction"
+                      ? "—"
+                      : `${improvement.toFixed(2)}%`
+                    : "—"}
+                </strong>
                 <small className="metric-sub">
                   Awal: {run ? formatNumber(run.initialCost) : "—"}
                 </small>
               </div>
 
               <div className="metric-cell">
-                <span className="metric-label">Iterasi</span>
+                <span className="metric-label">
+                  {run?.category === "local-search" ? "Langkah" : "Iterasi"}
+                </span>
                 <strong className="metric-value">
-                  {run ? run.iterations.toLocaleString("id-ID") : "—"}
+                  {run
+                    ? run.category === "construction"
+                      ? "—"
+                      : run.iterations.toLocaleString("id-ID")
+                    : "—"}
                 </strong>
                 <small className="metric-sub">
-                  {run ? `${run.evaluations.toLocaleString("id-ID")} kandidat` : "—"}
+                  {run && run.category !== "construction"
+                    ? `${run.evaluations.toLocaleString("id-ID")} kandidat`
+                    : "Konstruktif"}
                 </small>
               </div>
 
@@ -299,7 +538,13 @@ export function ControlHub({
                 <strong className="metric-value">
                   {run ? `${(run.durationMs / 1000).toFixed(2)}s` : "—"}
                 </strong>
-                <small className="metric-sub">{run ? run.config.algorithm : "TS/SA"}</small>
+                <small className="metric-sub">
+                  {run
+                    ? run.category === "construction"
+                      ? run.config.initialMethod
+                      : run.config.algorithm
+                    : "Metode"}
+                </small>
               </div>
             </div>
           </div>
@@ -331,6 +576,13 @@ export function ControlHub({
                 const isSelected = run?.id === r.id;
                 const runImpr =
                   r.initialCost === 0 ? 0 : ((r.initialCost - r.bestCost) / r.initialCost) * 100;
+
+                const categoryLabel =
+                  r.category === "construction"
+                    ? "Konstruksi"
+                    : r.category === "local-search"
+                      ? "Local Search"
+                      : "Metaheuristik";
 
                 return (
                   <button
@@ -377,15 +629,19 @@ export function ControlHub({
                         <span className="run-cost-label">Jarak Terbaik:</span>
                         <span className="run-best-cost">{formatNumber(r.bestCost)}</span>
                       </div>
-                      <div className="run-improvement">
-                        <TrendingDown size={12} />
-                        <span>{runImpr.toFixed(1)}%</span>
-                      </div>
+                      {r.category !== "construction" && (
+                        <div className="run-improvement">
+                          <TrendingDown size={12} />
+                          <span>{runImpr.toFixed(1)}%</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="run-card-footer">
                       <span className="run-meta">
-                        {r.config.initialMethod} · {r.iterations} iter
+                        {categoryLabel} · {r.config.initialMethod}
+                        {r.config.improve !== "none" ? ` + ${r.config.improve}` : ""}
+                        {r.category !== "construction" ? ` · ${r.iterations} langkah` : ""}
                       </span>
                       {isSelected && <span className="active-badge">Aktif di kanvas</span>}
                     </div>

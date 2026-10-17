@@ -2,7 +2,7 @@ import { validateDataset, validateRoute, type Dataset } from "../domain/tsp/mode
 import { validateConfig, type RunConfig, type RunResult } from "../domain/algorithms/experiment";
 import { twoOptMoves } from "../domain/algorithms/baselines";
 export interface SavedSession {
-  version: 1;
+  version: 2;
   dataset: Dataset;
   config: RunConfig;
   runs: RunResult[];
@@ -35,37 +35,97 @@ function validDataset(value: unknown): value is Dataset {
 export function parseSession(value: unknown): SavedSession {
   if (
     !record(value) ||
-    value.version !== 1 ||
+    (value.version !== 1 && value.version !== 2) ||
     !validDataset(value.dataset) ||
     !record(value.config) ||
-    validateConfig(value.config as unknown as RunConfig, value.dataset).length ||
     !Array.isArray(value.runs) ||
     value.runs.length > 10
   )
     throw new Error(
       "Format sesi tersimpan tidak valid. Contoh awal digunakan; sesi lama tidak ditimpa otomatis.",
     );
-  for (const run of value.runs as unknown[]) {
+
+  const rawConfig = value.config as Record<string, unknown>;
+  const migratedConfig: RunConfig = {
+    ...rawConfig,
+    category: (rawConfig.category as RunConfig["category"]) ?? "metaheuristic",
+    algorithm: (rawConfig.algorithm as RunConfig["algorithm"]) ?? "TS",
+    initialMethod: (rawConfig.initialMethod as RunConfig["initialMethod"]) ?? "NN",
+    improve:
+      typeof rawConfig.improve === "boolean"
+        ? rawConfig.improve
+          ? "2OPT"
+          : "none"
+        : ((rawConfig.improve as RunConfig["improve"]) ?? "none"),
+    startId: String(rawConfig.startId ?? "A"),
+    maxIterations: Number(rawConfig.maxIterations ?? 2000),
+    seed: Number(rawConfig.seed ?? 42),
+    tenure: Number(rawConfig.tenure ?? 7),
+    initialTemperature: Number(rawConfig.initialTemperature ?? 100),
+    coolingRate: Number(rawConfig.coolingRate ?? 0.95),
+    iterationsPerTemperature: Number(rawConfig.iterationsPerTemperature ?? 20),
+    minimumTemperature: Number(rawConfig.minimumTemperature ?? 0.001),
+  };
+
+  if (validateConfig(migratedConfig, value.dataset).length > 0) {
+    throw new Error("Konfigurasi sesi tersimpan tidak valid.");
+  }
+
+  const migratedRuns: RunResult[] = [];
+  for (const item of value.runs as unknown[]) {
     if (
-      !record(run) ||
-      !validDataset(run.dataset) ||
-      !record(run.config) ||
-      validateConfig(run.config as unknown as RunConfig, run.dataset).length ||
-      typeof run.id !== "string" ||
-      typeof run.createdAt !== "string" ||
-      !["completed", "cancelled"].includes(String(run.status)) ||
+      !record(item) ||
+      !validDataset(item.dataset) ||
+      !record(item.config) ||
+      typeof item.id !== "string" ||
+      typeof item.createdAt !== "string" ||
+      !["completed", "cancelled"].includes(String(item.status)) ||
       ![
         "iteration-limit",
         "minimum-temperature",
         "no-eligible",
         "empty-neighborhood",
         "cancelled",
-      ].includes(String(run.stopReason))
+        "no-improvement",
+        "step-limit",
+        "completed",
+      ].includes(String(item.stopReason))
     )
       throw new Error("Riwayat tersimpan tidak valid.");
-    const size = run.dataset.nodes.length;
+
+    const rawRunConfig = item.config as Record<string, unknown>;
+    const runCategory =
+      (item.category as RunResult["category"]) ??
+      (rawRunConfig.category as RunResult["category"]) ??
+      "metaheuristic";
+    const runConfig: RunConfig = {
+      ...rawRunConfig,
+      category: runCategory,
+      algorithm: (rawRunConfig.algorithm as RunConfig["algorithm"]) ?? "TS",
+      initialMethod: (rawRunConfig.initialMethod as RunConfig["initialMethod"]) ?? "NN",
+      improve:
+        typeof rawRunConfig.improve === "boolean"
+          ? rawRunConfig.improve
+            ? "2OPT"
+            : "none"
+          : ((rawRunConfig.improve as RunConfig["improve"]) ?? "none"),
+      startId: String(rawRunConfig.startId ?? "A"),
+      maxIterations: Number(rawRunConfig.maxIterations ?? 2000),
+      seed: Number(rawRunConfig.seed ?? 42),
+      tenure: Number(rawRunConfig.tenure ?? 7),
+      initialTemperature: Number(rawRunConfig.initialTemperature ?? 100),
+      coolingRate: Number(rawRunConfig.coolingRate ?? 0.95),
+      iterationsPerTemperature: Number(rawRunConfig.iterationsPerTemperature ?? 20),
+      minimumTemperature: Number(rawRunConfig.minimumTemperature ?? 0.001),
+    };
+
+    if (validateConfig(runConfig, item.dataset).length > 0) {
+      throw new Error("Konfigurasi run pada riwayat tidak valid.");
+    }
+
+    const size = item.dataset.nodes.length;
     for (const key of ["initialRoute", "currentRoute", "bestRoute"])
-      if (!Array.isArray(run[key]) || !validateRoute(run[key] as number[], size))
+      if (!Array.isArray(item[key]) || !validateRoute(item[key] as number[], size))
         throw new Error("Rute riwayat tersimpan tidak valid.");
     for (const key of [
       "initialCost",
@@ -75,32 +135,46 @@ export function parseSession(value: unknown): SavedSession {
       "iterations",
       "evaluations",
     ])
-      if (typeof run[key] !== "number" || !Number.isFinite(run[key]) || run[key] < 0)
+      if (typeof item[key] !== "number" || !Number.isFinite(item[key]) || (item[key] as number) < 0)
         throw new Error("Nilai riwayat tersimpan tidak valid.");
-    if (
-      !Array.isArray(run.trace) ||
-      run.trace.length !== run.iterations ||
-      run.trace.length > 10000
-    )
+
+    if (!Array.isArray(item.trace) || item.trace.length > 10000)
       throw new Error("Trace tersimpan tidak valid.");
-    const moves = new Set(twoOptMoves(size).map((move) => `${move.i}:${move.j}`));
-    if (
-      !run.trace.every(
-        (step: unknown, index: number) =>
-          record(step) &&
-          step.iteration === index + 1 &&
-          record(step.move) &&
-          moves.has(`${step.move.i}:${step.move.j}`) &&
-          typeof step.accepted === "boolean" &&
-          typeof step.reason === "string" &&
-          [step.candidateCost, step.currentCost, step.bestCost, step.delta].every(
-            (cost) => typeof cost === "number" && Number.isFinite(cost),
-          ),
+
+    if (runCategory === "metaheuristic") {
+      if (item.trace.length !== item.iterations) throw new Error("Trace tersimpan tidak valid.");
+      const moves = new Set(twoOptMoves(size).map((move) => `${move.i}:${move.j}`));
+      if (
+        !item.trace.every(
+          (step: unknown, index: number) =>
+            record(step) &&
+            step.iteration === index + 1 &&
+            record(step.move) &&
+            moves.has(`${step.move.i}:${step.move.j}`) &&
+            typeof step.accepted === "boolean" &&
+            typeof step.reason === "string" &&
+            [step.candidateCost, step.currentCost, step.bestCost, step.delta].every(
+              (cost) => typeof cost === "number" && Number.isFinite(cost),
+            ),
+        )
       )
-    )
-      throw new Error("Isi trace tersimpan tidak valid.");
+        throw new Error("Isi trace tersimpan tidak valid.");
+    }
+
+    migratedRuns.push({
+      ...(item as unknown as RunResult),
+      category: runCategory,
+      config: runConfig,
+      durations: item.durations as RunResult["durations"],
+    });
   }
-  return value as unknown as SavedSession;
+
+  return {
+    version: 2,
+    dataset: value.dataset,
+    config: migratedConfig,
+    runs: migratedRuns,
+  };
 }
 async function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

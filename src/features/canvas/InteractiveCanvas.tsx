@@ -235,9 +235,10 @@ export function InteractiveCanvas({
             disabled={busy}
             onClick={() => setShowUploadModal(true)}
             title="Unggah berkas Excel .xlsx koordinat"
+            aria-label="Impor Excel"
           >
             <Upload size={14} />
-            <span>Upload File</span>
+            <span>Impor Excel</span>
           </button>
 
           <button

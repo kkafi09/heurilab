@@ -86,8 +86,10 @@ export function ConfigPanel({
         <input
           type="checkbox"
           disabled={busy}
-          checked={config.improve}
-          onChange={(event) => onChange({ ...config, improve: event.target.checked })}
+          checked={config.improve !== "none"}
+          onChange={(event) =>
+            onChange({ ...config, improve: event.target.checked ? "2OPT" : "none" })
+          }
         />
         <span>Perbaiki solusi awal dengan 2-OPT</span>
       </label>

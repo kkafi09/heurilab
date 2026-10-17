@@ -15,12 +15,16 @@ import { Button } from "../components/ui";
 import { loadSession, saveSession } from "../services/storage";
 import {
   makeInitialRoute,
-  defaultConfig,
   validateConfig,
   type RunConfig,
   type RunResult,
 } from "../domain/algorithms/experiment";
-import type { Dataset, Route } from "../domain/tsp/model";
+import {
+  validateDataset,
+  type Dataset,
+  type Route,
+  type ValidationIssue,
+} from "../domain/tsp/model";
 import type { WorkerRequest, WorkerResponse } from "../services/protocol";
 
 export function App() {
@@ -43,12 +47,14 @@ export function App() {
   const { initialMethod, improve, startId } = state.config;
 
   // Calculate baseline initial route for current dataset
+  // Avoid heavy 3-OPT calculation on the synchronous render path
   const initial = useMemo(() => {
     if (state.dataset.nodes.length < 3) {
       return state.dataset.nodes.map((_, i) => i);
     }
     try {
-      return makeInitialRoute(state.dataset, { ...defaultConfig, initialMethod, improve, startId });
+      const previewImprove = improve === "3OPT" ? "none" : improve;
+      return makeInitialRoute(state.dataset, { initialMethod, improve: previewImprove, startId });
     } catch {
       return state.dataset.nodes.map((_, i) => i);
     }
@@ -98,7 +104,7 @@ export function App() {
     let live = true;
     const timer = setTimeout(() => {
       void saveSession({
-        version: 1,
+        version: 2,
         dataset: state.dataset,
         config: state.config,
         runs: state.runs,
@@ -125,7 +131,12 @@ export function App() {
   function start(dataset = state.dataset, config = state.config, initialRoute?: Route) {
     if (busy || !ready || dataset.nodes.length < 3) return;
     try {
-      makeInitialRoute(dataset, config);
+      const issues = validateDataset(dataset);
+      const cfgErrors = validateConfig(config, dataset);
+      if (issues.length || cfgErrors.length) {
+        throw new Error([...issues.map((i: ValidationIssue) => i.message), ...cfgErrors].join(" "));
+      }
+
       worker.current?.terminate();
       const current = new Worker(new URL("../workers/optimizer.ts", import.meta.url), {
         type: "module",
@@ -144,7 +155,7 @@ export function App() {
           setSaved(false);
           showToast({
             title: message.result.status === "cancelled" ? "Run dibatalkan" : "Eksperimen selesai",
-            description: "Best-so-far dan trace tersedia di riwayat serta halaman Report.",
+            description: "Best-so-far dan hasil tersedia di riwayat serta halaman Report.",
             status: "success",
           });
           current.terminate();
@@ -205,13 +216,25 @@ export function App() {
   }
 
   function repeat(previous: RunResult) {
-    const config: RunConfig = {
-      ...previous.config,
-      algorithm: previous.config.algorithm === "TS" ? "SA" : "TS",
-    };
-    dispatch({ type: "dataset", dataset: previous.dataset });
-    dispatch({ type: "config", config });
-    start(previous.dataset, config, previous.initialRoute);
+    if (previous.category === "metaheuristic") {
+      const config: RunConfig = {
+        ...previous.config,
+        algorithm: previous.config.algorithm === "TS" ? "SA" : "TS",
+      };
+      dispatch({ type: "dataset", dataset: previous.dataset });
+      dispatch({ type: "config", config });
+      start(previous.dataset, config, previous.initialRoute);
+    } else if (previous.category === "local-search") {
+      const config: RunConfig = {
+        ...previous.config,
+        algorithm: previous.config.algorithm === "2OPT" ? "3OPT" : "2OPT",
+      };
+      dispatch({ type: "dataset", dataset: previous.dataset });
+      dispatch({ type: "config", config });
+      start(previous.dataset, config);
+    } else {
+      start(previous.dataset, previous.config);
+    }
   }
 
   function removeRun(id: string) {
