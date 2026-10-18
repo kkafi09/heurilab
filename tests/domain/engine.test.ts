@@ -6,6 +6,7 @@ import {
   routeCost,
   validateDataset,
   validateRoute,
+  isDatasetIdentical,
   type Dataset,
   type Route,
 } from "../../src/domain/tsp/model";
@@ -48,6 +49,8 @@ import {
   getMethodDisplayName,
   getMethodShortLabel,
   evaluateComparisonCondition,
+  evaluatePairComparability,
+  getRunIdentity,
   calculateReportKPIs,
 } from "../../src/features/report/formatters";
 
@@ -662,7 +665,7 @@ describe("formatter dan logika perbandingan laporan", () => {
     };
 
     expect(evaluateComparisonCondition(runSAIdentical, runTS).label).toBe(
-      "Dataset, Rute & Iterasi Sama",
+      "Dataset, Rute & Batas Iterasi Sama",
     );
     expect(evaluateComparisonCondition(runSADiffIter, runTS).label).toBe(
       "Dataset & Rute Sama (Beda Iterasi)",
@@ -867,5 +870,190 @@ describe("formatter dan logika perbandingan laporan", () => {
     const kpis3 = calculateReportKPIs([runModern, runModern2, runLegacy], runModern);
     expect(kpis3.fastestDuration?.valueFormatted).not.toBe("1 ms");
     expect(kpis3.fastestDuration?.valueFormatted).toBe("20 ms");
+  });
+
+  test("getRunIdentity menghasilkan nomor stabil, ID singkat, dan label lengkap", () => {
+    const run1 = { ...execute(), id: "uuid-run-1" };
+    const run2 = { ...execute(), id: "uuid-run-2" };
+    const all = [run2, run1]; // run2 terbaru (idx 0), run1 terlama (idx 1)
+
+    const id1 = getRunIdentity(run1, all);
+    expect(id1.runNumber).toBe(1);
+    expect(id1.shortId).toBe("uuid-r");
+    expect(id1.fullLabel).toContain("Run #1");
+
+    const id2 = getRunIdentity(run2, all);
+    expect(id2.runNumber).toBe(2);
+    expect(id2.shortId).toBe("uuid-r");
+    expect(id2.fullLabel).toContain("Run #2");
+  });
+
+  test("evaluatePairComparability mengevaluasi berbagai kombinasi pasangan A/B", () => {
+    const runTS = {
+      ...execute({ algorithm: "TS", maxIterations: 2000 }),
+      id: "run-ts",
+      category: "metaheuristic" as const,
+      iterations: 3, // TS berhenti lebih awal karena no-eligible
+      stopReason: "no-eligible" as const,
+    };
+    const runSA = {
+      ...execute({ algorithm: "SA", maxIterations: 2000 }),
+      id: "run-sa",
+      category: "metaheuristic" as const,
+      initialRoute: [...runTS.initialRoute],
+      iterations: 2000,
+      stopReason: "iteration-limit" as const,
+    };
+
+    // 1. TS vs SA sebanding (dataset sama, rute awal identik, batas iterasi sama 2000)
+    const resMeta = evaluatePairComparability(runTS, runSA);
+    expect(resMeta.isComparable).toBe(true);
+    expect(resMeta.statusType).toBe("comparable");
+    expect(resMeta.headline).toBe("Sebanding (Dataset, Rute Awal & Batas Iterasi Identik)");
+    expect(resMeta.badgeVariant).toBe("success");
+    expect(resMeta.details.some((d) => d.includes("Batas iterasi maksimum sama: 2.000"))).toBe(
+      true,
+    );
+    expect(resMeta.details.some((d) => d.includes("Iterasi aktual berbeda (3 vs 2.000)"))).toBe(
+      true,
+    );
+
+    // 2. TS vs SA dengan batas iterasi berbeda
+    const runSADiffLimit = {
+      ...runSA,
+      id: "run-sa-500",
+      config: { ...runSA.config, maxIterations: 500 },
+    };
+    const resDiffLimit = evaluatePairComparability(runTS, runSADiffLimit);
+    expect(resDiffLimit.isComparable).toBe(false);
+    expect(resDiffLimit.statusType).toBe("different_iterations");
+    expect(resDiffLimit.headline).toBe("Batas Iterasi Berbeda");
+
+    // 3. Konstruksi vs Konstruksi (Start Node sama vs beda)
+    const runNN_A = {
+      ...execute({ initialMethod: "NN", startId: "A" }),
+      id: "run-nn-a",
+      category: "construction" as const,
+    };
+    const runNI_A = {
+      ...execute({ initialMethod: "NI", startId: "A" }),
+      id: "run-ni-a",
+      category: "construction" as const,
+    };
+    const runNN_B = {
+      ...execute({ initialMethod: "NN", startId: "B" }),
+      id: "run-nn-b",
+      category: "construction" as const,
+    };
+
+    const resConstSame = evaluatePairComparability(runNN_A, runNI_A);
+    expect(resConstSame.isComparable).toBe(true);
+    expect(resConstSame.headline).toContain("Dataset & Titik Awal Sama");
+
+    const resConstDiff = evaluatePairComparability(runNN_A, runNN_B);
+    expect(resConstDiff.isComparable).toBe(false);
+    expect(resConstDiff.statusType).toBe("different_start");
+    expect(resConstDiff.headline).toBe("Titik Awal Konstruksi Berbeda");
+
+    // 4. Local Search vs Local Search (tur masukan sama vs beda)
+    const run2Opt = {
+      ...execute({ algorithm: "2OPT", category: "local-search" as const }),
+      id: "run-2opt",
+      category: "local-search" as const,
+    };
+    const run3OptSame = {
+      ...execute({ algorithm: "3OPT", category: "local-search" as const }),
+      id: "run-3opt",
+      category: "local-search" as const,
+      initialRoute: [...run2Opt.initialRoute],
+    };
+    const run3OptDiff = {
+      ...execute({ algorithm: "3OPT", category: "local-search" as const }),
+      id: "run-3opt-diff",
+      category: "local-search" as const,
+      initialRoute: [0, 2, 1, 3, 4, 5],
+    };
+
+    expect(evaluatePairComparability(run2Opt, run3OptSame).isComparable).toBe(true);
+    expect(evaluatePairComparability(run2Opt, run3OptDiff).isComparable).toBe(false);
+    expect(evaluatePairComparability(run2Opt, run3OptDiff).statusType).toBe("different_route");
+
+    // 5. Lintas Kategori (Konstruksi vs Metaheuristik)
+    const resCross = evaluatePairComparability(runNN_A, runTS);
+    expect(resCross.isComparable).toBe(false);
+    expect(resCross.statusType).toBe("cross_category");
+    expect(resCross.headline).toBe("Perbandingan Bersifat Deskriptif");
+
+    // 6. Dataset Berbeda
+    const otherDataset = { ...EXAMPLE, id: "other", nodes: [{ id: "Z", x: 99, y: 99 }] };
+    const runOther = { ...runTS, id: "run-other", dataset: otherDataset };
+    const resOtherDs = evaluatePairComparability(runTS, runOther);
+    expect(resOtherDs.isComparable).toBe(false);
+    expect(resOtherDs.statusType).toBe("different_dataset");
+
+    // 7. Run Dibatalkan / Parsial
+    const runCancelled = {
+      ...runTS,
+      id: "run-cancel",
+      status: "cancelled" as const,
+      cancelledStage: "preparation" as const,
+    };
+    const resCancel = evaluatePairComparability(runCancelled, runSA);
+    expect(resCancel.cancelledWarning).toBeDefined();
+    expect(resCancel.cancelledWarning).toContain("Hasil Parsial");
+  });
+
+  test("comparisonCsv menyertakan kolom side bila sideMap diberikan", () => {
+    const runA = { ...execute(), id: "run-a" };
+    const runB = { ...execute(), id: "run-b" };
+
+    const csvWithSide = comparisonCsv([runA, runB], { [runA.id]: "A", [runB.id]: "B" });
+    expect(csvWithSide.startsWith('"side","run_id"')).toBe(true);
+    expect(csvWithSide).toContain('"A","run-a"');
+    expect(csvWithSide).toContain('"B","run-b"');
+
+    const csvNoSide = comparisonCsv([runA, runB]);
+    expect(csvNoSide.startsWith('"run_id"')).toBe(true);
+  });
+
+  test("isDatasetIdentical membandingkan koordinat dan struktur secara mendalam", () => {
+    // 1. Dataset yang sama persis
+    expect(isDatasetIdentical(EXAMPLE, { ...EXAMPLE })).toBe(true);
+
+    // 2. ID dataset atau nama berbeda tapi koordinat dan node identik
+    const renamed = { ...EXAMPLE, id: "renamed-fixture", name: "Fixture Modifikasi" };
+    expect(isDatasetIdentical(EXAMPLE, renamed)).toBe(true);
+
+    // 3. ID dataset sama ("custom") tapi koordinat berbeda (misal random generation berulang)
+    const sameIdDiffCoords: Dataset = {
+      ...EXAMPLE,
+      nodes: EXAMPLE.nodes.map((n, i) => (i === 0 ? { ...n, x: n.x + 5 } : { ...n })),
+    };
+    expect(isDatasetIdentical(EXAMPLE, sameIdDiffCoords)).toBe(false);
+
+    // 4. Jumlah node berbeda
+    const subset: Dataset = {
+      ...EXAMPLE,
+      nodes: EXAMPLE.nodes.slice(0, 3),
+    };
+    expect(isDatasetIdentical(EXAMPLE, subset)).toBe(false);
+
+    // 5. Unit berbeda
+    const diffUnit: Dataset = {
+      ...EXAMPLE,
+      unit: "km" as unknown as "unit",
+    };
+    expect(isDatasetIdentical(EXAMPLE, diffUnit)).toBe(false);
+
+    // 6. Integrasi dengan evaluatePairComparability: dataset ID sama tapi koordinat beda dianggap different_dataset
+    const runTS = { ...execute({ algorithm: "TS" }), id: "run-ts" };
+    const runTSDiffCoords = {
+      ...execute({ algorithm: "TS" }),
+      id: "run-ts-diff",
+      dataset: sameIdDiffCoords,
+    };
+    const compResult = evaluatePairComparability(runTS, runTSDiffCoords);
+    expect(compResult.isComparable).toBe(false);
+    expect(compResult.statusType).toBe("different_dataset");
   });
 });

@@ -9,10 +9,17 @@ HeuriLab adalah aplikasi pembelajaran berbasis web untuk optimasi Traveling Sale
 ## Sumber kebenaran
 
 - Instruksi tugas terbaru dosen dan brief penyerahan menentukan apa yang harus dikumpulkan.
-- Kode, `README.md`, `docs/METHODOLOGY.md`, `docs/VERIFICATION.md`, dan `data/` menunjukkan perilaku aplikasi yang benar-benar tersedia.
-- `PROJECT_SUBMISSION_PLAN.md` mencatat kebutuhan tugas dan rencana pengembangan. Bedakan fitur yang sudah tersedia dari fitur yang baru direncanakan.
+- Kode, `README.md`, dan `data/` menunjukkan perilaku aplikasi yang benar-benar tersedia. Cocokkan catatan metodologi dan verifikasi dengan versi kode serta pemeriksaan yang benar-benar dijalankan.
+- Folder `plans/` menyimpan acuan kebutuhan, keputusan, metodologi, verifikasi, dan riwayat perbaikan proyek.
 - Dokumen laporan/brainstorming di Google Docs adalah bahan kerja; cocokkan setiap klaimnya dengan implementasi sebelum menyalin ke laporan atau PPT.
 - Jika dokumen lama berbeda dari aplikasi, jangan menyatakan fitur itu tersedia. Catat sebagai batasan atau rencana lanjutan.
+
+## Acuan perubahan: `plans/`
+
+- Saat ada perubahan atau pengembangan lanjutan, periksa folder `plans/` dan baca dokumen yang relevan untuk memahami kebutuhan serta keputusan sebelumnya.
+- Implementasi yang telah selesai menjadi kondisi awal pekerjaan. Gunakan rencana sebagai konteks; jangan mengulang implementasi hanya karena dokumen lama masih berisi instruksi pengembangan.
+- Cocokkan acuan dengan kode terbaru, pengujian, dan instruksi pengguna. Jika ada perbedaan, ikuti kebutuhan terbaru yang berlaku dan jelaskan selisihnya.
+- `plans/` bersifat lokal dan diabaikan Git. Jangan memakai `git add -f` atau memasukkannya ke commit/push tanpa permintaan eksplisit pengguna. Jika folder tidak tersedia pada checkout lain, periksa sumber yang ada dan laporkan keterbatasannya.
 
 ## Fakta implementasi yang harus dipertahankan
 
@@ -28,7 +35,7 @@ HeuriLab adalah aplikasi pembelajaran berbasis web untuk optimasi Traveling Sale
 
 ## Alur kerja perubahan
 
-1. Baca `README.md`, metodologi, verifikasi, dan modul terkait sebelum menyunting.
+1. Baca `README.md`, periksa acuan yang relevan dalam folder `plans/`, lalu telusuri kode dan pengujian terkait sebelum menyunting.
 2. Jaga perubahan tetap terarah; jangan menimpa perubahan pengguna atau mengubah data tanpa kebutuhan tugas.
 3. Untuk klaim laporan/PPT, cocokkan angka, parameter, nama kontrol, format impor/ekspor, dan batasan langsung dengan kode/dokumentasi saat ini.
 4. Pertahankan stack dan perintah proyek yang dideklarasikan `package.json`; jangan menambah dependensi untuk pekerjaan dokumentasi.
@@ -38,6 +45,6 @@ HeuriLab adalah aplikasi pembelajaran berbasis web untuk optimasi Traveling Sale
 
 Brief yang diberikan untuk proyek ini meminta perhitungan manual Tabu Search, file proyek/laporan dengan Latar Belakang, Tinjauan Pustaka, Metodologi, Analisis dan Pembahasan, Kesimpulan, serta penjelasan akses aplikasi dan Help, coding, dan PPT. Tenggat yang disebutkan adalah Minggu, 18 Oktober 2026. Pastikan setiap artefak bisa ditelusuri ke aplikasi/kalkulasi yang sama.
 
-Saat menyusun perhitungan manual, tampilkan dataset dan satuan, rute awal, biaya, neighborhood/move yang diperiksa, tabu list/tenure, aspiration bila berlaku, current dan best pada tiap iterasi, serta alasan berhenti. Terapkan tie-break dan aturan tabu yang terdokumentasi di `docs/METHODOLOGY.md` agar hasilnya dapat direproduksi.
+Saat menyusun perhitungan manual, tampilkan dataset dan satuan, rute awal, biaya, neighborhood/move yang diperiksa, tabu list/tenure, aspiration bila berlaku, current dan best pada tiap iterasi, serta alasan berhenti. Terapkan tie-break dan aturan tabu sesuai implementasi serta acuan metodologi dalam folder `plans/` agar hasilnya dapat direproduksi.
 
-Perubahan dokumentasi yang merencanakan NFI/3-OPT tidak berarti algoritma tersebut telah diimplementasikan. Setelah kode dikembangkan, perbarui README, metodologi, Help, dan verifikasi agar hanya menyatakan perilaku yang sudah diuji.
+Setelah perubahan implementasi, selaraskan README, metodologi, Help, dan catatan verifikasi dengan perilaku yang benar-benar sudah diuji.

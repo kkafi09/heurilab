@@ -14,6 +14,7 @@ import {
 import { Button } from "../components/ui";
 import { loadSession, saveSession } from "../services/storage";
 import {
+  defaultConfig,
   makeInitialRoute,
   validateConfig,
   type RunConfig,
@@ -98,10 +99,15 @@ export function App() {
     };
   }, [dispatch]);
 
-  // Persist session changes debounce 500ms
+  // Persist session changes: segera saat riwayat berubah (delay 0), debounce 500ms untuk konfigurasi/dataset
+  const prevRunsRef = useRef(state.runs);
   useEffect(() => {
     if (!ready || !persist || validateConfig(state.config, state.dataset).length) return;
     let live = true;
+    const isRunsChanged = prevRunsRef.current !== state.runs;
+    prevRunsRef.current = state.runs;
+    const delay = isRunsChanged ? 0 : 500;
+
     const timer = setTimeout(() => {
       void saveSession({
         version: 2,
@@ -118,7 +124,7 @@ export function App() {
             setPersist(false);
           }
         });
-    }, 500);
+    }, delay);
     return () => {
       live = false;
       clearTimeout(timer);
@@ -218,6 +224,7 @@ export function App() {
   function repeat(previous: RunResult) {
     if (previous.category === "metaheuristic") {
       const config: RunConfig = {
+        ...defaultConfig,
         ...previous.config,
         algorithm: previous.config.algorithm === "TS" ? "SA" : "TS",
       };
@@ -226,6 +233,7 @@ export function App() {
       start(previous.dataset, config, previous.initialRoute);
     } else if (previous.category === "local-search") {
       const config: RunConfig = {
+        ...defaultConfig,
         ...previous.config,
         algorithm: previous.config.algorithm === "2OPT" ? "3OPT" : "2OPT",
       };

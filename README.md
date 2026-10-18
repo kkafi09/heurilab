@@ -137,6 +137,6 @@ belum tersedia. Heuristik tidak menjamin optimum pada dataset lain. Iterasi sama
 beban komputasi sama: TS mengevaluasi seluruh neighborhood, SA satu kandidat per iterasi.
 
 Tauri desktop, hosting publik, akun/backend, dan pitch deck mengikuti roadmap
-setelah MVP. Rencana MVP ada pada MVP_PLAN.md; roadmap produk lengkap ada pada PLAN.md.
+setelah MVP. Rencana MVP ada pada [plans/MVP_PLAN.md](plans/MVP_PLAN.md); roadmap produk lengkap ada pada [plans/PLAN.md](plans/PLAN.md).
 
 Komponen beUI gratis berlisensi MIT; atribusi dan lisensinya ada pada THIRD_PARTY_NOTICES.md.

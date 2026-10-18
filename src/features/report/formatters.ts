@@ -1,5 +1,7 @@
-import { datasetKey } from "../../domain/tsp/model";
+import { isDatasetIdentical } from "../../domain/tsp/model";
 import { EPSILON, type RunResult } from "../../domain/algorithms/experiment";
+
+export { isDatasetIdentical };
 
 /**
  * Format jarak biaya rute dalam locale id-ID dengan 3 angka desimal.
@@ -177,7 +179,7 @@ export function evaluateComparisonCondition(
     };
   }
 
-  const datasetMatches = datasetKey(target.dataset) === datasetKey(reference.dataset);
+  const datasetMatches = isDatasetIdentical(target.dataset, reference.dataset);
   if (!datasetMatches) {
     return {
       label: "Dataset Berbeda",
@@ -209,7 +211,7 @@ export function evaluateComparisonCondition(
     const iterMatches = target.config.maxIterations === reference.config.maxIterations;
     if (routeMatches && iterMatches) {
       return {
-        label: "Dataset, Rute & Iterasi Sama",
+        label: "Dataset, Rute & Batas Iterasi Sama",
         className: "same",
         tooltip: "Dataset, rute awal, dan batas iterasi identik dengan acuan.",
       };
@@ -248,10 +250,9 @@ export function evaluateComparisonCondition(
  * Filter run yang benar-benar sebanding dengan run acuan untuk perhitungan statistik agregat.
  */
 export function getComparableRuns(runs: RunResult[], reference: RunResult): RunResult[] {
-  const refKey = datasetKey(reference.dataset);
   return runs.filter((r) => {
     // 1. Dataset wajib identik
-    if (datasetKey(r.dataset) !== refKey) return false;
+    if (!isDatasetIdentical(r.dataset, reference.dataset)) return false;
 
     // 2. Kategori wajib sama
     if (r.category !== reference.category) return false;
@@ -318,9 +319,8 @@ export function calculateReportKPIs(runs: RunResult[], reference: RunResult | nu
   }
 
   // 1. Jarak terendah pada dataset acuan (hanya run pada dataset yang sama)
-  const refDatasetKey = datasetKey(reference.dataset);
   const datasetRuns = runs.filter(
-    (r) => datasetKey(r.dataset) === refDatasetKey && r.status !== "cancelled",
+    (r) => isDatasetIdentical(r.dataset, reference.dataset) && r.status !== "cancelled",
   );
 
   let bestDistance: ReportKPIData["bestDistance"] = null;
@@ -457,5 +457,211 @@ export function calculateReportKPIs(runs: RunResult[], reference: RunResult | nu
     avgImprovement,
     fastestDuration,
     totalRuns,
+  };
+}
+
+/**
+ * Identitas terpadu run yang stabil di seluruh Report.
+ */
+export function getRunIdentity(
+  run: RunResult,
+  runs: RunResult[],
+): {
+  runNumber: number;
+  shortId: string;
+  methodName: string;
+  fullLabel: string;
+} {
+  const idx = runs.findIndex((r) => r.id === run.id);
+  const runNumber = idx >= 0 ? runs.length - idx : 1;
+  const shortId = run.id.slice(0, 6);
+  const methodName = getMethodDisplayName(run);
+  return {
+    runNumber,
+    shortId,
+    methodName,
+    fullLabel: `Run #${runNumber} · ${methodName} (#${shortId})`,
+  };
+}
+
+export interface PairComparability {
+  isComparable: boolean;
+  statusType:
+    | "comparable"
+    | "different_route"
+    | "different_dataset"
+    | "different_iterations"
+    | "different_start"
+    | "cross_category"
+    | "partial";
+  headline: string;
+  badgeText: string;
+  badgeVariant: "success" | "warning" | "info" | "neutral";
+  details: string[];
+  maxIterationsNote?: string;
+  cancelledWarning?: string;
+}
+
+/**
+ * Evaluasi mendalam kesebandingan pasangan dua hasil (Hasil A vs Hasil B).
+ */
+export function evaluatePairComparability(runA: RunResult, runB: RunResult): PairComparability {
+  const isCancelledA = runA.status === "cancelled";
+  const isCancelledB = runB.status === "cancelled";
+  const cancelledWarning =
+    isCancelledA || isCancelledB
+      ? `Hasil Parsial: Salah satu atau kedua run dibatalkan sebelum selesai (A: ${
+          isCancelledA ? (runA.cancelledStage ?? "batal") : "selesai"
+        }, B: ${
+          isCancelledB ? (runB.cancelledStage ?? "batal") : "selesai"
+        }). Anggaran komputasi tidak setara.`
+      : undefined;
+
+  // Deep dataset comparison: node count, unit, IDs, and coordinates
+  const sameDataset = isDatasetIdentical(runA.dataset, runB.dataset);
+
+  if (!sameDataset) {
+    return {
+      isComparable: false,
+      statusType: "different_dataset",
+      headline: "Dataset Berbeda",
+      badgeText: "Beda Dataset",
+      badgeVariant: "warning",
+      details: [
+        `Dataset "${runA.dataset.name}" dan "${runB.dataset.name}" memiliki koordinat atau himpunan titik berbeda. Skala jarak tidak ekuivalen.`,
+      ],
+      cancelledWarning,
+    };
+  }
+
+  // Case 1: Construction vs Construction
+  if (runA.category === "construction" && runB.category === "construction") {
+    const sameStart = runA.config.startId === runB.config.startId;
+    if (sameStart) {
+      return {
+        isComparable: true,
+        statusType: "comparable",
+        headline: "Sebanding (Dataset & Titik Awal Sama)",
+        badgeText: "Sebanding",
+        badgeVariant: "success",
+        details: [
+          `Kedua metode konstruksi berangkat dari titik awal yang sama (Node ${runA.config.startId}).`,
+          "Rute konstruksi berbeda karena masing-masing heuristik menerapkan aturan pemilihan dan penambahan simpul yang berlainan.",
+        ],
+        cancelledWarning,
+      };
+    }
+    return {
+      isComparable: false,
+      statusType: "different_start",
+      headline: "Titik Awal Konstruksi Berbeda",
+      badgeText: "Beda Titik Awal",
+      badgeVariant: "warning",
+      details: [
+        `Titik awal berbeda (Node ${runA.config.startId} vs Node ${runB.config.startId}). Perbedaan jarak akhir dipengaruhi pemilihan titik awal.`,
+      ],
+      cancelledWarning,
+    };
+  }
+
+  // Case 2: Local Search vs Local Search
+  if (runA.category === "local-search" && runB.category === "local-search") {
+    const sameRoute = areRoutesIdentical(runA.initialRoute, runB.initialRoute);
+    if (sameRoute) {
+      return {
+        isComparable: true,
+        statusType: "comparable",
+        headline: "Sebanding (Dataset & Rute Masukan Identik)",
+        badgeText: "Sebanding",
+        badgeVariant: "success",
+        details: [
+          "Kedua algoritma pencarian lokal berangkat dari tur masukan yang persis sama.",
+          "Perbedaan hasil akhir semata-mata berasal dari kemampuan perbaikan neighborhood (2-OPT vs 3-OPT).",
+        ],
+        cancelledWarning,
+      };
+    }
+    return {
+      isComparable: false,
+      statusType: "different_route",
+      headline: "Rute Masukan Berbeda",
+      badgeText: "Beda Rute Masukan",
+      badgeVariant: "warning",
+      details: [
+        "Tur masukan sebelum perbaikan lokal tidak identik. Performa akhir dipengaruhi kualitas rute awal.",
+      ],
+      cancelledWarning,
+    };
+  }
+
+  // Case 3: Metaheuristic vs Metaheuristic
+  if (runA.category === "metaheuristic" && runB.category === "metaheuristic") {
+    const sameRoute = areRoutesIdentical(runA.initialRoute, runB.initialRoute);
+    const sameMaxIter = runA.config.maxIterations === runB.config.maxIterations;
+
+    if (sameRoute && sameMaxIter) {
+      const details = [
+        "Dataset dan rute solusi awal identik.",
+        `Batas iterasi maksimum sama: ${runA.config.maxIterations.toLocaleString("id-ID")} iterasi.`,
+      ];
+      if (runA.iterations !== runB.iterations) {
+        details.push(
+          `Iterasi aktual berbeda (${runA.iterations.toLocaleString("id-ID")} vs ${runB.iterations.toLocaleString("id-ID")}) karena kriteria berhenti tercapai lebih awal (${runA.stopReason} vs ${runB.stopReason}).`,
+        );
+      }
+      details.push(
+        `Parameter spesifik algoritma (${runA.config.algorithm === "TS" ? `Tabu tenure ${runA.config.tenure}` : `T₀=${runA.config.initialTemperature}, α=${runA.config.coolingRate}`} vs ${runB.config.algorithm === "TS" ? `Tabu tenure ${runB.config.tenure}` : `T₀=${runB.config.initialTemperature}, α=${runB.config.coolingRate}`}) tetap berlaku sesuai metode masing-masing.`,
+      );
+
+      return {
+        isComparable: true,
+        statusType: "comparable",
+        headline: "Sebanding (Dataset, Rute Awal & Batas Iterasi Identik)",
+        badgeText: "Sebanding",
+        badgeVariant: "success",
+        details,
+        maxIterationsNote: `Batas iterasi maksimum sama (${runA.config.maxIterations.toLocaleString("id-ID")})`,
+        cancelledWarning,
+      };
+    }
+
+    if (sameRoute && !sameMaxIter) {
+      return {
+        isComparable: false,
+        statusType: "different_iterations",
+        headline: "Batas Iterasi Berbeda",
+        badgeText: "Beda Batas Iterasi",
+        badgeVariant: "warning",
+        details: [
+          `Rute awal identik, namun batas iterasi maksimum berbeda (${runA.config.maxIterations.toLocaleString("id-ID")} vs ${runB.config.maxIterations.toLocaleString("id-ID")}). Alokasi anggaran komputasi tidak seimbang.`,
+        ],
+        cancelledWarning,
+      };
+    }
+
+    return {
+      isComparable: false,
+      statusType: "different_route",
+      headline: "Rute Solusi Awal Berbeda",
+      badgeText: "Beda Rute Awal",
+      badgeVariant: "warning",
+      details: [
+        "Solusi awal yang diumpankan ke metaheuristik berbeda urutan. Perbandingan terdistorsi oleh perbedaan kualitas awal.",
+      ],
+      cancelledWarning,
+    };
+  }
+
+  // Case 4: Cross Category
+  return {
+    isComparable: false,
+    statusType: "cross_category",
+    headline: "Perbandingan Bersifat Deskriptif",
+    badgeText: "Lintas Kategori",
+    badgeVariant: "info",
+    details: [
+      `Metode berasal dari kategori berbeda (${runA.category} vs ${runB.category}) dengan mekanisme komputasi yang tidak setara (misal konstruksi langsung 1 lintasan vs pencarian iteratif).`,
+    ],
+    cancelledWarning,
   };
 }

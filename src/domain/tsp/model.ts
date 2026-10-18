@@ -68,3 +68,18 @@ export function closedRoute(route: Route, dataset: Dataset): string[] {
 export function datasetKey(dataset: Dataset): string {
   return JSON.stringify({ nodes: dataset.nodes, unit: dataset.unit, distance: "euclidean" });
 }
+
+export function isDatasetIdentical(a: Dataset, b: Dataset): boolean {
+  if (a === b) return true;
+  if (a.unit !== b.unit) return false;
+  if (a.nodes.length !== b.nodes.length) return false;
+  return a.nodes.every((nA, i) => {
+    const nB = b.nodes[i];
+    return (
+      nB !== undefined &&
+      nA.id === nB.id &&
+      Math.abs(nA.x - nB.x) < 1e-9 &&
+      Math.abs(nA.y - nB.y) < 1e-9
+    );
+  });
+}

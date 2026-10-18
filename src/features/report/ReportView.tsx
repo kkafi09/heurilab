@@ -1,27 +1,32 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Download,
   ArrowLeft,
   Activity,
   TableProperties,
   TrendingDown,
-  Clock,
   Layers,
   Eye,
   Trash2,
-  CheckCircle2,
-  GitCompare,
   AlertTriangle,
   Info,
   SkipBack,
   SkipForward,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   RotateCcw,
+  ArrowRightLeft,
 } from "lucide-react";
 import { Button, Empty, formatNumber, stopLabels } from "../../components/ui";
 import { Select } from "../../components/ui/select";
-import { distanceMatrix, closedRoute, type Dataset, type Route } from "../../domain/tsp/model";
+import {
+  distanceMatrix,
+  closedRoute,
+  datasetKey,
+  type Dataset,
+  type Route,
+} from "../../domain/tsp/model";
 import {
   type RunResult,
   type TraceStep,
@@ -36,10 +41,10 @@ import {
   formatDuration,
   formatStageBreakdown,
   getMethodDisplayName,
-  getMethodShortLabel,
   areRoutesIdentical,
-  evaluateComparisonCondition,
-  calculateReportKPIs,
+  evaluatePairComparability,
+  getRunIdentity,
+  isDatasetIdentical,
 } from "./formatters";
 
 function getCategoryBadge(category?: RunCategory) {
@@ -63,7 +68,58 @@ function getCategoryBadge(category?: RunCategory) {
   }
 }
 
-const getMethodTitle = getMethodDisplayName;
+function findDefaultBId(runs: RunResult[], aId: string): string {
+  const targetA = runs.find((r) => r.id === aId);
+  if (!targetA || runs.length < 2) return "";
+
+  const compAlg =
+    targetA.config.algorithm === "TS"
+      ? "SA"
+      : targetA.config.algorithm === "SA"
+        ? "TS"
+        : targetA.config.algorithm === "2OPT" || targetA.config.improve === "2OPT"
+          ? "3OPT"
+          : targetA.config.algorithm === "3OPT" || targetA.config.improve === "3OPT"
+            ? "2OPT"
+            : null;
+
+  if (compAlg) {
+    const match = runs.find(
+      (r) =>
+        r.id !== targetA.id &&
+        isDatasetIdentical(r.dataset, targetA.dataset) &&
+        (r.config.algorithm === compAlg || r.config.improve === compAlg) &&
+        areRoutesIdentical(r.initialRoute, targetA.initialRoute),
+    );
+    if (match) return match.id;
+  }
+
+  if (targetA.category === "construction") {
+    const sameCatConstruct = runs.find(
+      (r) =>
+        r.id !== targetA.id &&
+        r.category === "construction" &&
+        isDatasetIdentical(r.dataset, targetA.dataset),
+    );
+    if (sameCatConstruct) return sameCatConstruct.id;
+  }
+
+  const sameCat = runs.find(
+    (r) =>
+      r.id !== targetA.id &&
+      r.category === targetA.category &&
+      isDatasetIdentical(r.dataset, targetA.dataset),
+  );
+  if (sameCat) return sameCat.id;
+
+  const sameData = runs.find(
+    (r) => r.id !== targetA.id && isDatasetIdentical(r.dataset, targetA.dataset),
+  );
+  if (sameData) return sameData.id;
+
+  const second = runs.find((r) => r.id !== targetA.id);
+  return second ? second.id : "";
+}
 
 export function ReportView({
   runs,
@@ -82,50 +138,82 @@ export function ReportView({
   onClearRuns: () => void;
   onBackToPlayground: () => void;
 }) {
-  // Reference run untuk acuan perbandingan
-  const [referenceRunId, setReferenceRunId] = useState<string>(activeRun?.id ?? runs[0]?.id ?? "");
-  // Run terpilih untuk analisis detail/trace
-  const [selectedRunId, setSelectedRunId] = useState<string>(activeRun?.id ?? runs[0]?.id ?? "");
+  const [runAId, setRunAId] = useState<string>(() => activeRun?.id ?? runs[0]?.id ?? "");
+  const [runBId, setRunBId] = useState<string>(() => {
+    const aId = activeRun?.id ?? runs[0]?.id ?? "";
+    return findDefaultBId(runs, aId);
+  });
 
-  const [compareRunId, setCompareRunId] = useState<string>("");
-  const [selectedStep, setSelectedStep] = useState<number>(-1);
+  // Sumber analisis tab Detail & Trace: "A" atau "B"
+  const [detailSource, setDetailSource] = useState<"A" | "B">("A");
   const [tab, setTab] = useState<"comparison" | "trace" | "matrix">("comparison");
-  const [matrixSource, setMatrixSource] = useState<"canvas" | "run">("canvas");
+  const [matrixSource, setMatrixSource] = useState<"A" | "B" | "canvas">("A");
 
-  const [prevSelectedId, setPrevSelectedId] = useState(selectedRunId);
-  if (prevSelectedId !== selectedRunId) {
-    setPrevSelectedId(selectedRunId);
-    setSelectedStep(-1);
-    const target = runs.find((r) => r.id === selectedRunId);
-    if (target && target.category === "metaheuristic") {
-      const match = runs.find(
-        (r) =>
-          r.id !== target.id &&
-          r.category === "metaheuristic" &&
-          r.dataset.id === target.dataset.id &&
-          r.trace.length > 0,
-      );
-      setCompareRunId(match ? match.id : "");
-    } else {
-      setCompareRunId("");
+  // Replay mode pada tab Detail: "final" (rute hasil akhir) atau "iterating" (telusuri iterasi)
+  const [selectedStep, setSelectedStep] = useState<number>(-1);
+
+  // Bagian riwayat pendukung (tertutup secara default)
+  const [showAllHistory, setShowAllHistory] = useState(false);
+
+  // Rincian kondisi kesebandingan
+  const [showConditionDetails, setShowConditionDetails] = useState(false);
+
+  // Dropdown menu ekspor terpadu
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (exportRef.current && !exportRef.current.contains(event.target as Node)) {
+        setIsExportOpen(false);
+      }
     }
+    if (isExportOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [isExportOpen]);
+
+  // State adjustment untuk pergantian run
+  const runA = runs.find((r) => r.id === runAId) ?? (runs.length > 0 ? runs[0]! : null);
+  const runB = runs.find((r) => r.id === runBId) ?? null;
+
+  // Run aktif pada tab Detail & Trace
+  const detailRun = detailSource === "B" && runB ? runB : runA;
+
+  const [prevDetailId, setPrevDetailId] = useState<string>(detailRun?.id ?? "");
+  if (detailRun && prevDetailId !== detailRun.id) {
+    setPrevDetailId(detailRun.id);
+    setSelectedStep(-1);
   }
 
-  // Fallback acuan: jika acuan saat ini tidak ditemukan (misal dihapus), gunakan activeRun atau run terbaru
-  const reference = runs.find((r) => r.id === referenceRunId) ?? activeRun ?? runs[0] ?? null;
-  const run = runs.find((r) => r.id === selectedRunId) ?? reference ?? runs[0] ?? null;
-  const compareRun = runs.find((r) => r.id === compareRunId) ?? null;
+  const handleSelectA = (newAId: string) => {
+    setRunAId(newAId);
+    if (newAId === runBId) {
+      setRunBId("");
+    }
+  };
 
-  const kpis = calculateReportKPIs(runs, reference);
-  const hasMetaheuristic = runs.some((r) => r.category === "metaheuristic");
+  const handleSelectB = (newBId: string) => {
+    if (newBId === runAId) return;
+    setRunBId(newBId);
+  };
+
+  const handleSwapAB = () => {
+    if (!runA || !runB) return;
+    const prevA = runA.id;
+    const prevB = runB.id;
+    setRunAId(prevB);
+    setRunBId(prevA);
+  };
 
   if (runs.length === 0 && !activeRun) {
     return (
       <div className="report-empty-container">
         <Empty title="Belum Ada Hasil Eksperimen">
           Jalankan metode secara mandiri (Pembentukan Solusi Awal, Local Search, atau Metaheuristik)
-          di Playground untuk melihat analisis rute, durasi tiap fase komputasi, dan perbandingan
-          performa di sini.
+          di Playground untuk melihat analisis rute, perbandingan dua hasil, dan evaluasi kondisi
+          kesebandingan di sini.
         </Empty>
         <div className="mt-4 flex justify-center">
           <Button onClick={onBackToPlayground}>
@@ -135,6 +223,43 @@ export function ReportView({
       </div>
     );
   }
+
+  const idA = runA ? getRunIdentity(runA, runs) : null;
+  const idB = runB ? getRunIdentity(runB, runs) : null;
+  const pairComp = runA && runB ? evaluatePairComparability(runA, runB) : null;
+
+  // Active dataset untuk tab Matriks Jarak
+  let activeMatrixDataset: Dataset | null = null;
+  let activeSourceTitle = "";
+  let activeSourceType: "snapshot" | "canvas" = "snapshot";
+  let activeSourceDetail = "";
+
+  if (matrixSource === "A") {
+    if (runA) {
+      activeMatrixDataset = runA.dataset;
+      activeSourceTitle = `Hasil A — ${getMethodDisplayName(runA)}`;
+      activeSourceType = "snapshot";
+      activeSourceDetail = `Snapshot hasil tersimpan #${runA.id.slice(0, 6)} (Run #${idA?.runNumber ?? 1})`;
+    }
+  } else if (matrixSource === "B") {
+    if (runB) {
+      activeMatrixDataset = runB.dataset;
+      activeSourceTitle = `Hasil B — ${getMethodDisplayName(runB)}`;
+      activeSourceType = "snapshot";
+      activeSourceDetail = `Snapshot hasil tersimpan #${runB.id.slice(0, 6)} (Run #${idB?.runNumber ?? 2})`;
+    }
+  } else if (matrixSource === "canvas") {
+    activeMatrixDataset = currentDataset;
+    activeSourceTitle = "Data kerja di kanvas";
+    activeSourceType = "canvas";
+    activeSourceDetail = "Data koordinat aktif di Playground saat ini";
+  }
+
+  const matrixSourceOptions = [
+    ...(runA ? [{ value: "A", label: `Hasil A — ${getMethodDisplayName(runA)}` }] : []),
+    ...(runB ? [{ value: "B", label: `Hasil B — ${getMethodDisplayName(runB)}` }] : []),
+    { value: "canvas", label: "Data kerja di kanvas" },
+  ];
 
   return (
     <div className="report-view-container">
@@ -162,26 +287,130 @@ export function ReportView({
         </div>
 
         <div className="report-header-toolbar">
-          {run && (
+          {/* Menu Dropdown Ekspor Terpadu */}
+          <div className="export-dropdown-wrapper" ref={exportRef}>
             <Button
               size="sm"
               variant="outline"
-              onClick={() => exportRun(run)}
-              title={`Ekspor detail run #${runs.length - runs.findIndex((r) => r.id === run.id)}`}
+              disabled={runs.length === 0}
+              onClick={() => setIsExportOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={isExportOpen}
+              aria-label="Pilihan Ekspor"
+              title="Buka pilihan unduh/ekspor eksperimen"
             >
               <Download size={14} />
-              <span>Ekspor JSON (#{run.id.slice(0, 6)})</span>
+              <span>Ekspor</span>
+              <ChevronDown
+                size={13}
+                className={`transition-transform duration-150 ${isExportOpen ? "rotate-180" : ""}`}
+              />
             </Button>
-          )}
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={runs.length === 0}
-            onClick={() => exportComparison(runs)}
-          >
-            <Download size={14} />
-            <span>Ekspor CSV</span>
-          </Button>
+
+            {isExportOpen && (
+              <div
+                className="export-menu-popover"
+                role="menu"
+                tabIndex={-1}
+                aria-label="Pilihan format ekspor"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setIsExportOpen(false);
+                  }
+                }}
+              >
+                {/* 1. CSV Pasangan A/B */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="export-menu-item"
+                  disabled={!runA || !runB}
+                  onClick={() => {
+                    if (runA && runB) {
+                      exportComparison([runA, runB], "heurilab-perbandingan.csv", {
+                        [runA.id]: "A",
+                        [runB.id]: "B",
+                      });
+                      setIsExportOpen(false);
+                    }
+                  }}
+                  title={!runB ? "Pilih Hasil B terlebih dahulu di tab Perbandingan" : undefined}
+                >
+                  <div className="font-semibold text-xs text-slate-800">CSV pasangan A/B</div>
+                  <div className="text-[11px] text-slate-500">
+                    {runA && runB
+                      ? "Tabel perbandingan berdampingan dengan kolom penanda sisi A dan B"
+                      : "Memerlukan Hasil A dan Hasil B aktif"}
+                  </div>
+                </button>
+
+                {/* 2. JSON Hasil A */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="export-menu-item"
+                  disabled={!runA}
+                  onClick={() => {
+                    if (runA) {
+                      exportRun(runA);
+                      setIsExportOpen(false);
+                    }
+                  }}
+                >
+                  <div className="font-semibold text-xs text-slate-800">
+                    JSON Hasil A {runA ? `(#${runA.id.slice(0, 6)})` : ""}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {runA
+                      ? `Detail run dan trace lengkap ${getMethodDisplayName(runA)}`
+                      : "Hasil A belum dipilih"}
+                  </div>
+                </button>
+
+                {/* 3. JSON Hasil B */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="export-menu-item"
+                  disabled={!runB}
+                  onClick={() => {
+                    if (runB) {
+                      exportRun(runB);
+                      setIsExportOpen(false);
+                    }
+                  }}
+                >
+                  <div className="font-semibold text-xs text-slate-800">
+                    JSON Hasil B {runB ? `(#${runB.id.slice(0, 6)})` : ""}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {runB
+                      ? `Detail run dan trace lengkap ${getMethodDisplayName(runB)}`
+                      : "Hasil B belum dipilih"}
+                  </div>
+                </button>
+
+                {/* 4. CSV Semua Riwayat */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="export-menu-item"
+                  disabled={runs.length === 0}
+                  onClick={() => {
+                    exportComparison(runs, "heurilab-semua-riwayat.csv");
+                    setIsExportOpen(false);
+                  }}
+                >
+                  <div className="font-semibold text-xs text-slate-800">CSV semua riwayat</div>
+                  <div className="text-[11px] text-slate-500">
+                    Ringkasan seluruh {runs.length} hasil eksperimen sesi ini
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Hapus Riwayat */}
           <Button
             size="sm"
             variant="outline"
@@ -192,7 +421,7 @@ export function ReportView({
                 onClearRuns();
               }
             }}
-            title="Hapus seluruh riwayat eksperimen"
+            title="Hapus seluruh riwayat eksperimen sesi"
           >
             <Trash2 size={14} />
             <span>Hapus riwayat</span>
@@ -214,7 +443,7 @@ export function ReportView({
           type="button"
           className={`report-tab-btn ${tab === "trace" ? "active" : ""}`}
           onClick={() => setTab("trace")}
-          disabled={!run}
+          disabled={!detailRun}
         >
           <Activity size={15} />
           <span>Detail & Trace</span>
@@ -229,370 +458,1050 @@ export function ReportView({
         </button>
       </div>
 
-      {/* Tab 1: Leaderboard Comparison Table */}
+      {/* =========================================================================
+          TAB 1: PERBANDINGAN DUA HASIL (A vs B)
+          ========================================================================= */}
       {tab === "comparison" && (
         <div className="panel report-panel">
-          <div className="section-heading">
+          <div className="section-heading mb-3">
             <div>
               <h3 className="section-title">Perbandingan hasil</h3>
-              {reference && (
-                <div className="reference-callout">
-                  <span className="reference-tag">Acuan:</span>
-                  <strong className="text-slate-800">
-                    #{runs.length - runs.findIndex((r) => r.id === reference.id)} —{" "}
-                    {getMethodDisplayName(reference)}
-                  </strong>
-                  <span className="text-xs text-slate-500">
-                    ({reference.dataset.name} · #{reference.id.slice(0, 6)})
-                  </span>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Pilih Hasil A dan Hasil B untuk mengevaluasi kesebandingan kondisi dan membandingkan
+                performa langsung.
+              </p>
+            </div>
+          </div>
+
+          {/* 1. Selector A/B Grid */}
+          <div className="ab-selector-grid">
+            {/* Card Hasil A */}
+            <div className="ab-card side-a">
+              <div className="ab-card-header">
+                <div className="flex items-center gap-1.5">
+                  <span className="reference-tag text-xs text-slate-500 font-semibold">Acuan:</span>
+                  <span className="side-pill side-a">Hasil A</span>
+                </div>
+                {idA && <span className="run-id-pill">#{idA.shortId}</span>}
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-slate-700 block">
+                  Pilih Eksperimen A:
+                </span>
+                <Select
+                  value={runA?.id ?? ""}
+                  onChange={handleSelectA}
+                  options={runs.map((r) => {
+                    const ident = getRunIdentity(r, runs);
+                    const isB = r.id === runB?.id;
+                    return {
+                      value: r.id,
+                      label: `${ident.fullLabel} (${formatDistance(r.bestCost)})${isB ? " — [Dipilih sebagai B]" : ""}`,
+                      badge: r.config.algorithm,
+                      disabled: isB,
+                    };
+                  })}
+                />
+              </div>
+
+              {runA && (
+                <div className="ab-meta-grid">
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Metode:</span>
+                    <strong className="text-xs text-slate-800">{getMethodDisplayName(runA)}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Dataset:</span>
+                    <strong className="text-xs text-slate-800">
+                      {runA.dataset.name} ({runA.dataset.nodes.length} node)
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Titik Awal:</span>
+                    <span className="text-xs text-slate-700 font-medium">
+                      Node {runA.config.startId}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
-            {hasMetaheuristic && (
-              <span className="small muted">
-                Satu iterasi TS mengevaluasi seluruh neighborhood; SA mengevaluasi satu kandidat per
-                langkah.
-              </span>
-            )}
-          </div>
 
-          <div className="table-scroll">
-            <table className="comparison-table">
-              <thead>
-                <tr>
-                  <th>Kategori & Metode</th>
-                  <th>Dataset</th>
-                  <th>Jarak Awal → Akhir</th>
-                  <th>Perbaikan (%)</th>
-                  <th>Iterasi / Evaluasi</th>
-                  <th>Waktu (Fase)</th>
-                  <th>Konfigurasi</th>
-                  <th>Kondisi</th>
-                  <th>Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((item, idx) => {
-                  const isSelected = item.id === run?.id;
-                  const isReference = item.id === reference?.id;
-                  const catInfo = getCategoryBadge(item.category);
-                  const isConstruction = item.category === "construction";
-                  const isLocalSearch = item.category === "local-search";
+            {/* Swap Button A/B */}
+            <div className="ab-swap-container">
+              <button
+                type="button"
+                className="ab-swap-btn"
+                disabled={!runA || !runB}
+                onClick={handleSwapAB}
+                title={
+                  !runA || !runB
+                    ? "Pilih Hasil A dan Hasil B terlebih dahulu untuk menukar"
+                    : "Tukar posisi Hasil A dan Hasil B"
+                }
+              >
+                <ArrowRightLeft size={14} />
+                <span>Tukar</span>
+              </button>
+            </div>
 
-                  const isNoChange =
-                    !isConstruction && Math.abs(item.initialCost - item.bestCost) <= EPSILON;
-                  const isImproved = !isConstruction && item.initialCost > item.bestCost + EPSILON;
-                  const rawImpr = isConstruction
-                    ? null
-                    : item.initialCost === 0
-                      ? 0
-                      : ((item.initialCost - item.bestCost) / item.initialCost) * 100;
+            {/* Card Hasil B */}
+            <div className="ab-card side-b">
+              <div className="ab-card-header">
+                <span className={`side-pill ${runB ? "side-b" : "side-b-empty"}`}>
+                  {runB ? "Hasil B" : "Hasil B (Kosong)"}
+                </span>
+                {idB && <span className="run-id-pill">#{idB.shortId}</span>}
+              </div>
 
-                  const durationInfo = formatStageBreakdown(item);
-                  const cond = evaluateComparisonCondition(item, reference);
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-slate-700 block">
+                  Pilih Eksperimen B (Pembanding):
+                </span>
+                <Select
+                  value={runB?.id ?? ""}
+                  onChange={handleSelectB}
+                  placeholder="Pilih hasil pembanding B..."
+                  options={[
+                    { value: "", label: "(Belum memilih Hasil B)" },
+                    ...runs.map((r) => {
+                      const ident = getRunIdentity(r, runs);
+                      const isA = r.id === runA?.id;
+                      return {
+                        value: r.id,
+                        label: `${ident.fullLabel} (${formatDistance(r.bestCost)})${isA ? " — [Dipilih sebagai A]" : ""}`,
+                        badge: r.config.algorithm,
+                        disabled: isA,
+                      };
+                    }),
+                  ]}
+                />
+              </div>
 
-                  return (
-                    <tr
-                      key={item.id}
-                      className={`${isSelected ? "selected-row" : ""} ${isReference ? "reference-row" : ""}`}
-                      onClick={() => {
-                        setSelectedRunId(item.id);
-                        setReferenceRunId(item.id);
-                      }}
-                      title="Klik untuk memilih sebagai acuan perbandingan dan analisis detail"
-                    >
-                      <td>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span
-                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${catInfo.badgeClass}`}
-                          >
-                            {catInfo.label}
-                          </span>
-                          <span className="text-xs font-bold text-slate-700">
-                            #{runs.length - idx}
-                          </span>
-                        </div>
-                        <strong className="block text-sm">{getMethodDisplayName(item)}</strong>
-                      </td>
-                      <td>
-                        <strong>{item.dataset.name}</strong>
-                        <small>
-                          {item.dataset.nodes.length} node · {item.dataset.unit}
-                        </small>
-                      </td>
-                      <td>
-                        {isConstruction || isNoChange ? (
-                          <strong className="best-cell font-tabular">
-                            {formatDistance(item.bestCost)}
-                          </strong>
-                        ) : (
-                          <>
-                            <span className="muted line-through text-xs mr-1 font-tabular">
-                              {formatDistance(item.initialCost)}
-                            </span>
-                            <strong className="best-cell font-tabular">
-                              {formatDistance(item.bestCost)}
-                            </strong>
-                          </>
-                        )}
-                      </td>
-                      <td>
-                        {isConstruction ? (
-                          <span className="text-slate-400 font-mono">—</span>
-                        ) : isNoChange ? (
-                          <span className="improvement-neutral">0,00% (Tidak berubah)</span>
-                        ) : isImproved ? (
-                          <span className="improvement-badge">
-                            <TrendingDown size={12} />{" "}
-                            {rawImpr! < 0.01 ? "<0,01%" : formatPercent(rawImpr!)}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-mono text-xs">
-                            {formatPercent(rawImpr!)}
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        {isConstruction ? (
-                          <span className="small text-slate-600">1 lintasan deterministik</span>
-                        ) : isLocalSearch ? (
-                          <>
-                            {item.iterations} langkah
-                            <small>{item.evaluations.toLocaleString("id-ID")} kandidat</small>
-                          </>
-                        ) : (
-                          <>
-                            {item.iterations.toLocaleString("id-ID")} iterasi
-                            <small>{item.evaluations.toLocaleString("id-ID")} evaluasi</small>
-                          </>
-                        )}
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-1">
-                          <Clock size={11} className="text-slate-400" />
-                          <span className="font-tabular font-medium">
-                            {durationInfo.totalFormatted}
-                          </span>
-                        </div>
-                        {durationInfo.summary && (
-                          <small
-                            className="text-[10px] text-slate-500 font-tabular"
-                            title={durationInfo.parts
-                              .map((p) => `${p.label}: ${p.formatted}`)
-                              .join(", ")}
-                          >
-                            {durationInfo.summary}
-                          </small>
-                        )}
-                      </td>
-                      <td>
-                        {isConstruction ? (
-                          <span className="small font-medium">Start: {item.config.startId}</span>
-                        ) : isLocalSearch ? (
-                          <>
-                            <span className="small font-medium">
-                              Basis: {item.config.initialMethod}
-                            </span>
-                            <small>Start: {item.config.startId}</small>
-                          </>
-                        ) : (
-                          <>
-                            <span className="small font-medium">
-                              {item.config.initialMethod}
-                              {item.config.improve && item.config.improve !== "none"
-                                ? ` + ${item.config.improve}`
-                                : ""}
-                            </span>
-                            <small>
-                              {item.config.algorithm === "TS"
-                                ? `tenure ${item.config.tenure}`
-                                : `T₀ ${item.config.initialTemperature}, α ${item.config.coolingRate}`}
-                            </small>
-                          </>
-                        )}
-                      </td>
-                      <td>
-                        <span className={`condition-tag ${cond.className}`} title={cond.tooltip}>
-                          {cond.label}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            aria-label={`Buka Detail run #${runs.length - idx}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedRunId(item.id);
-                              setReferenceRunId(item.id);
-                              setTab("trace");
-                            }}
-                            title="Buka Analisis Detail"
-                          >
-                            <Activity size={14} /> Detail
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSelectRun(item.id);
-                              onBackToPlayground();
-                            }}
-                            title="Tampilkan di Kanvas Playground"
-                          >
-                            <Eye size={14} /> Kanvas
-                          </Button>
-                          <button
-                            type="button"
-                            className="delete-run-icon-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRemoveRun(item.id);
-                            }}
-                            title="Hapus run ini"
-                            aria-label={`Hapus run #${runs.length - idx}`}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* KPI Summary Cards for Leaderboard */}
-          {runs.length > 0 && (
-            <div className="leaderboard-kpi-grid">
-              <div className="kpi-card">
-                <div className="kpi-card-header">
-                  <span className="kpi-card-title">Jarak terendah pada dataset acuan</span>
-                  {kpis.bestDistance && (
-                    <span
-                      className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                        kpis.bestDistance.isTie
-                          ? "bg-amber-100 text-amber-800 border border-amber-200"
-                          : "bg-teal-100 text-teal-800 border border-teal-200"
-                      }`}
-                    >
-                      {kpis.bestDistance.methodsLabel}
+              {runB ? (
+                <div className="ab-meta-grid">
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Metode:</span>
+                    <strong className="text-xs text-slate-800">{getMethodDisplayName(runB)}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Dataset:</span>
+                    <strong className="text-xs text-slate-800">
+                      {runB.dataset.name} ({runB.dataset.nodes.length} node)
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Titik Awal:</span>
+                    <span className="text-xs text-slate-700 font-medium">
+                      Node {runB.config.startId}
                     </span>
-                  )}
+                  </div>
                 </div>
-                <strong className="kpi-card-value text-teal-800">
-                  {kpis.bestDistance ? kpis.bestDistance.valueFormatted : "—"}
-                </strong>
-                <span className="kpi-card-sub">
-                  {kpis.bestDistance
-                    ? kpis.bestDistance.subLabel
-                    : "Belum ada hasil selesai pada dataset acuan"}
-                </span>
+              ) : (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500 text-center">
+                  Belum ada hasil pembanding B yang dipilih. Pilih salah satu hasil dari menu
+                  dropdown di atas untuk mengaktifkan perbandingan 2 hasil.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 2. Status Kesebandingan Sebelum Hasil */}
+          {pairComp && (
+            <div className={`comparability-panel variant-${pairComp.badgeVariant}`}>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className={`comparability-badge ${pairComp.badgeVariant}`}>
+                    {pairComp.badgeText}
+                  </span>
+                  <strong className="text-sm text-slate-800">{pairComp.headline}</strong>
+                </div>
+                {pairComp.details.length > 0 && (
+                  <button
+                    type="button"
+                    className="text-xs text-teal-700 hover:text-teal-800 underline font-medium"
+                    onClick={() => setShowConditionDetails((v) => !v)}
+                  >
+                    {showConditionDetails ? "Sembunyikan rincian" : "Lihat kondisi"}
+                  </button>
+                )}
               </div>
 
-              <div className="kpi-card">
-                <div className="kpi-card-header">
-                  <span className="kpi-card-title">Rata-rata perbaikan kelompok sebanding</span>
-                  <TrendingDown size={16} className="text-teal-700" />
+              {pairComp.cancelledWarning && (
+                <div className="p-2 mt-2 bg-rose-50 border border-rose-200 rounded text-rose-800 text-xs font-medium flex items-center gap-1.5">
+                  <AlertTriangle size={14} className="text-rose-600 shrink-0" />
+                  <span>{pairComp.cancelledWarning}</span>
                 </div>
-                <strong className="kpi-card-value text-teal-700">
-                  {kpis.avgImprovement ? kpis.avgImprovement.valueFormatted : "—"}
-                </strong>
-                <span className="kpi-card-sub">
-                  {kpis.avgImprovement
-                    ? kpis.avgImprovement.subLabel
-                    : "Perlu minimal 2 hasil sebanding"}
-                </span>
-              </div>
+              )}
 
-              <div className="kpi-card">
-                <div className="kpi-card-header">
-                  <span className="kpi-card-title">Durasi total terendah dalam kelompok</span>
-                  <Clock size={16} className="text-slate-400" />
-                </div>
-                <strong className="kpi-card-value">
-                  {kpis.fastestDuration ? kpis.fastestDuration.valueFormatted : "—"}
-                </strong>
-                <span className="kpi-card-sub">
-                  {kpis.fastestDuration
-                    ? kpis.fastestDuration.subLabel
-                    : "Perlu minimal 2 hasil sebanding"}
-                </span>
-              </div>
-
-              <div className="kpi-card">
-                <div className="kpi-card-header">
-                  <span className="kpi-card-title">Total eksperimen</span>
-                  <CheckCircle2 size={16} className="text-slate-400" />
-                </div>
-                <strong className="kpi-card-value">{kpis.totalRuns.count}</strong>
-                <span className="kpi-card-sub">{kpis.totalRuns.subLabel}</span>
-              </div>
+              {showConditionDetails && pairComp.details.length > 0 && (
+                <ul className="comparability-list mt-2 pt-2 border-t border-slate-200/60">
+                  {pairComp.details.map((detail, idx) => (
+                    <li key={idx}>{detail}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
+
+          {/* 3. Tabel Perbandingan 3 Kolom: Metrik | Hasil A | Hasil B */}
+          {runA && (
+            <div className="comparison-3col-container">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <span className="text-xs font-semibold text-slate-700">
+                  Evaluasi Metrik Berdampingan
+                </span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!runA || !runB}
+                  onClick={() => {
+                    if (runA && runB) {
+                      exportComparison([runA, runB], "heurilab-perbandingan.csv", {
+                        [runA.id]: "A",
+                        [runB.id]: "B",
+                      });
+                    }
+                  }}
+                  title={
+                    !runB
+                      ? "Pilih Hasil B terlebih dahulu untuk mengekspor CSV perbandingan pasangan"
+                      : "Ekspor CSV perbandingan dua hasil aktif (A & B)"
+                  }
+                >
+                  <Download size={14} />
+                  <span>Ekspor CSV</span>
+                </Button>
+              </div>
+
+              <table className="comparison-3col-table">
+                <thead>
+                  <tr>
+                    <th className="col-metric">Metrik Evaluasi</th>
+                    <th className="col-run col-run-a">
+                      <div className="col-run-header">
+                        <span className="side-pill side-a">Hasil A</span>
+                        {idA && (
+                          <span className="run-id-pill">
+                            #{idA.runNumber} · #{idA.shortId}
+                          </span>
+                        )}
+                      </div>
+                      <strong className="block text-sm text-slate-800">
+                        {getMethodDisplayName(runA)}
+                      </strong>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setDetailSource("A");
+                            setTab("trace");
+                          }}
+                          title="Buka Analisis Detail Hasil A"
+                        >
+                          <Activity size={13} /> Detail
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            onSelectRun(runA.id);
+                            onBackToPlayground();
+                          }}
+                          title="Tampilkan Hasil A di Kanvas Playground"
+                        >
+                          <Eye size={13} /> Kanvas
+                        </Button>
+                      </div>
+                    </th>
+                    <th className="col-run col-run-b">
+                      {runB && idB ? (
+                        <>
+                          <div className="col-run-header">
+                            <span className="side-pill side-b">Hasil B</span>
+                            <span className="run-id-pill">
+                              #{idB.runNumber} · #{idB.shortId}
+                            </span>
+                          </div>
+                          <strong className="block text-sm text-slate-800">
+                            {getMethodDisplayName(runB)}
+                          </strong>
+                          <div className="flex items-center gap-1.5 mt-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setDetailSource("B");
+                                setTab("trace");
+                              }}
+                              title="Buka Analisis Detail Hasil B"
+                            >
+                              <Activity size={13} /> Detail
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                onSelectRun(runB.id);
+                                onBackToPlayground();
+                              }}
+                              title="Tampilkan Hasil B di Kanvas Playground"
+                            >
+                              <Eye size={13} /> Kanvas
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="py-2 text-slate-400">
+                          <span className="side-pill side-b-empty">Hasil B</span>
+                          <span className="block text-xs text-slate-500 mt-1">
+                            (Belum memilih pembanding B)
+                          </span>
+                        </div>
+                      )}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* Baris 1: Metode */}
+                  <tr>
+                    <td className="col-metric">Metode</td>
+                    <td>
+                      <strong className="text-slate-800">{getMethodDisplayName(runA)}</strong>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <strong className="text-slate-800">{getMethodDisplayName(runB)}</strong>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 2: Kategori */}
+                  <tr>
+                    <td className="col-metric">Kategori Eksperimen</td>
+                    <td>
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded ${getCategoryBadge(runA.category).badgeClass}`}
+                      >
+                        {getCategoryBadge(runA.category).label}
+                      </span>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <span
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded ${getCategoryBadge(runB.category).badgeClass}`}
+                        >
+                          {getCategoryBadge(runB.category).label}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 2: Dataset */}
+                  <tr>
+                    <td className="col-metric">Dataset Uji</td>
+                    <td>
+                      <strong>{runA.dataset.name}</strong>
+                      <span className="text-xs text-slate-500 block">
+                        {runA.dataset.nodes.length} node · {runA.dataset.unit}
+                      </span>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <>
+                          <strong>{runB.dataset.name}</strong>
+                          <span className="text-xs text-slate-500 block">
+                            {runB.dataset.nodes.length} node · {runB.dataset.unit}
+                          </span>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 3: Titik Awal */}
+                  <tr>
+                    <td className="col-metric">Titik Awal (Start Node)</td>
+                    <td>
+                      <span className="font-semibold text-slate-800">
+                        Node {runA.config.startId}
+                      </span>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <span className="font-semibold text-slate-800">
+                          Node {runB.config.startId}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 4: Jarak Awal */}
+                  <tr>
+                    <td className="col-metric">Jarak Solusi Awal</td>
+                    <td>
+                      {runA.category === "construction" ? (
+                        <span className="text-slate-400 font-mono">— (Baseline Konstruksi)</span>
+                      ) : (
+                        <span className="font-tabular text-slate-700">
+                          {formatDistance(runA.initialCost)} {runA.dataset.unit}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {runB ? (
+                        runB.category === "construction" ? (
+                          <span className="text-slate-400 font-mono">— (Baseline Konstruksi)</span>
+                        ) : (
+                          <span className="font-tabular text-slate-700">
+                            {formatDistance(runB.initialCost)} {runB.dataset.unit}
+                          </span>
+                        )
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 5: Jarak Akhir Terbaik */}
+                  <tr>
+                    <td className="col-metric">Jarak Hasil / Terbaik</td>
+                    <td>
+                      <strong className="text-teal-700 font-tabular font-bold text-sm">
+                        {formatDistance(runA.bestCost)} {runA.dataset.unit}
+                      </strong>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <strong className="text-amber-700 font-tabular font-bold text-sm">
+                          {formatDistance(runB.bestCost)} {runB.dataset.unit}
+                        </strong>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 6: Persentase Perbaikan */}
+                  <tr>
+                    <td className="col-metric">Perbaikan Terhadap Awal</td>
+                    <td>
+                      {runA.category === "construction" ? (
+                        <span className="text-slate-400 font-mono">—</span>
+                      ) : Math.abs(runA.initialCost - runA.bestCost) <= EPSILON ? (
+                        <span className="text-slate-500 font-medium">0,00% (Tetap)</span>
+                      ) : (
+                        <span className="text-teal-700 font-semibold font-tabular">
+                          {formatPercent(
+                            ((runA.initialCost - runA.bestCost) / runA.initialCost) * 100,
+                          )}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {runB ? (
+                        runB.category === "construction" ? (
+                          <span className="text-slate-400 font-mono">—</span>
+                        ) : Math.abs(runB.initialCost - runB.bestCost) <= EPSILON ? (
+                          <span className="text-slate-500 font-medium">0,00% (Tetap)</span>
+                        ) : (
+                          <span className="text-amber-700 font-semibold font-tabular">
+                            {formatPercent(
+                              ((runB.initialCost - runB.bestCost) / runB.initialCost) * 100,
+                            )}
+                          </span>
+                        )
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 7: Iterasi / Langkah Aktual */}
+                  <tr>
+                    <td className="col-metric">Iterasi / Langkah Aktual</td>
+                    <td>
+                      {runA.category === "construction" ? (
+                        <span className="text-slate-500 text-xs">1 lintasan deterministik</span>
+                      ) : runA.category === "local-search" ? (
+                        <span>{runA.iterations} langkah descent</span>
+                      ) : (
+                        <span>{runA.iterations.toLocaleString("id-ID")} iterasi</span>
+                      )}
+                    </td>
+                    <td>
+                      {runB ? (
+                        runB.category === "construction" ? (
+                          <span className="text-slate-500 text-xs">1 lintasan deterministik</span>
+                        ) : runB.category === "local-search" ? (
+                          <span>{runB.iterations} langkah descent</span>
+                        ) : (
+                          <span>{runB.iterations.toLocaleString("id-ID")} iterasi</span>
+                        )
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 8: Evaluasi Kandidat */}
+                  <tr>
+                    <td className="col-metric">Evaluasi Kandidat</td>
+                    <td>
+                      <span className="font-tabular">
+                        {runA.evaluations.toLocaleString("id-ID")} kandidat
+                      </span>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <span className="font-tabular">
+                          {runB.evaluations.toLocaleString("id-ID")} kandidat
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 9: Batas Iterasi Maksimum */}
+                  <tr>
+                    <td className="col-metric">Batas Iterasi Maksimum</td>
+                    <td>
+                      {runA.category === "metaheuristic" ? (
+                        <span className="font-tabular">
+                          {runA.config.maxIterations.toLocaleString("id-ID")} iterasi
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-mono">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {runB ? (
+                        runB.category === "metaheuristic" ? (
+                          <span className="font-tabular">
+                            {runB.config.maxIterations.toLocaleString("id-ID")} iterasi
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 font-mono">—</span>
+                        )
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 10: Waktu Pencarian Murni */}
+                  <tr>
+                    <td className="col-metric">Waktu Pencarian (Search Time)</td>
+                    <td>
+                      <span className="font-tabular font-medium text-slate-800">
+                        {formatDuration(
+                          runA.durations?.searchMs ??
+                            (runA.category === "construction"
+                              ? runA.durations?.constructionMs
+                              : runA.durations
+                                ? undefined
+                                : runA.durationMs),
+                        )}
+                      </span>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <span className="font-tabular font-medium text-slate-800">
+                          {formatDuration(
+                            runB.durations?.searchMs ??
+                              (runB.category === "construction"
+                                ? runB.durations?.constructionMs
+                                : runB.durations
+                                  ? undefined
+                                  : runB.durationMs),
+                          )}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 11: Total Waktu Pipeline Terukur */}
+                  <tr>
+                    <td className="col-metric">Total Waktu Komputasi Terukur</td>
+                    <td>
+                      <span className="font-tabular text-slate-700">
+                        {runA.durations?.totalMs !== undefined
+                          ? formatDuration(runA.durations.totalMs)
+                          : "— (data legacy tanpa breakdown)"}
+                      </span>
+                      {runA.durations && (
+                        <small className="block text-[10px] text-slate-500 font-tabular mt-0.5">
+                          {formatStageBreakdown(runA).summary}
+                        </small>
+                      )}
+                    </td>
+                    <td>
+                      {runB ? (
+                        <>
+                          <span className="font-tabular text-slate-700">
+                            {runB.durations?.totalMs !== undefined
+                              ? formatDuration(runB.durations.totalMs)
+                              : "— (data legacy tanpa breakdown)"}
+                          </span>
+                          {runB.durations && (
+                            <small className="block text-[10px] text-slate-500 font-tabular mt-0.5">
+                              {formatStageBreakdown(runB).summary}
+                            </small>
+                          )}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Baris 12: Status Eksekusi */}
+                  <tr>
+                    <td className="col-metric">Status & Alasan Berhenti</td>
+                    <td>
+                      <span className="font-medium text-slate-800">
+                        {runA.status === "completed" ? "Selesai" : "Dibatalkan"}:
+                      </span>{" "}
+                      <span className="text-xs text-slate-600">
+                        {stopLabels[runA.stopReason] ?? runA.stopReason}
+                      </span>
+                    </td>
+                    <td>
+                      {runB ? (
+                        <>
+                          <span className="font-medium text-slate-800">
+                            {runB.status === "completed" ? "Selesai" : "Dibatalkan"}:
+                          </span>{" "}
+                          <span className="text-xs text-slate-600">
+                            {stopLabels[runB.stopReason] ?? runB.stopReason}
+                          </span>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* 4. Kartu Ringkasan Pasangan (Pair Summary Card) */}
+          {runA && runB && (
+            <div className="pair-summary-card">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">
+                Ringkasan Pasangan Uji
+              </h4>
+
+              {!pairComp || !pairComp.isComparable ? (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 text-sm">
+                  <strong>Kondisi berbeda — hasil ditampilkan untuk ditinjau:</strong>{" "}
+                  {pairComp?.headline ?? "Kondisi pengujian tidak sebanding"}. Metrik jarak dan
+                  durasi ditampilkan berdampingan pada tabel di atas untuk evaluasi masing-masing
+                  run, tanpa penetapan keunggulan otomatis.
+                </div>
+              ) : Math.abs(runA.bestCost - runB.bestCost) <= EPSILON ? (
+                <div className="p-3 bg-teal-50 border border-teal-200 rounded-lg text-teal-900 text-sm">
+                  <strong>Jarak setara dalam toleransi numerik pada pasangan ini:</strong> Kedua
+                  metode menghasilkan rute dengan panjang yang setara (
+                  <span className="font-tabular font-bold">{formatDistance(runA.bestCost)}</span>{" "}
+                  {runA.dataset.unit}).
+                </div>
+              ) : runA.bestCost < runB.bestCost ? (
+                <div className="p-3 bg-teal-50 border border-teal-200 rounded-lg text-teal-900 text-sm">
+                  <strong>
+                    Hasil A ({getMethodDisplayName(runA)}) menghasilkan jarak lebih pendek:
+                  </strong>{" "}
+                  Tur Hasil A lebih hemat{" "}
+                  <span className="font-tabular font-bold">
+                    {formatPercent(((runB.bestCost - runA.bestCost) / (runB.bestCost || 1)) * 100)}
+                  </span>{" "}
+                  (selisih{" "}
+                  <span className="font-tabular font-bold">
+                    {formatDistance(runB.bestCost - runA.bestCost)}
+                  </span>{" "}
+                  {runA.dataset.unit}) dibanding Hasil B pada percobaan ini.
+                </div>
+              ) : (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-sm">
+                  <strong>
+                    Hasil B ({getMethodDisplayName(runB)}) menghasilkan jarak lebih pendek:
+                  </strong>{" "}
+                  Tur Hasil B lebih hemat{" "}
+                  <span className="font-tabular font-bold">
+                    {formatPercent(((runA.bestCost - runB.bestCost) / (runA.bestCost || 1)) * 100)}
+                  </span>{" "}
+                  (selisih{" "}
+                  <span className="font-tabular font-bold">
+                    {formatDistance(runA.bestCost - runB.bestCost)}
+                  </span>{" "}
+                  {runA.dataset.unit}) dibanding Hasil A pada percobaan ini.
+                </div>
+              )}
+
+              {/* Catatan waktu komparatif */}
+              {pairComp?.isComparable &&
+                runA.durations?.searchMs !== undefined &&
+                runB.durations?.searchMs !== undefined && (
+                  <p className="text-xs text-slate-600 mt-2">
+                    <strong>Komparasi Waktu Pencarian (searchMs):</strong> Hasil A menyelesaikan
+                    tahap pencarian dalam {formatDuration(runA.durations.searchMs)}, sedangkan Hasil
+                    B membutuhkan {formatDuration(runB.durations.searchMs)}.
+                  </p>
+                )}
+
+              {/* Catatan Ilmiah Netral & Spesifik */}
+              <p className="text-[11px] text-slate-500 mt-2.5 leading-relaxed">
+                <em>Catatan Ilmiah:</em> Hasil perbandingan ini berlaku spesifik pada dataset,
+                konfigurasi parameter, dan seed pengujian ini. Tabu Search pada implementasi ini
+                bersifat deterministik untuk input dan konfigurasi yang sama, sedangkan Simulated
+                Annealing menggunakan generator angka acak semu (PRNG) berbasis seed sehingga dapat
+                direproduksi. Keduanya merupakan metode metaheuristik yang tidak menjamin
+                tercapainya optimum global untuk dataset umum; hasil satu percobaan tidak
+                membuktikan keunggulan mutlak suatu metode atas metode lain secara umum.
+              </p>
+            </div>
+          )}
+
+          {/* 5. Bagian Parameter Eksperimen & Urutan Rute Lengkap */}
+          {runA && (
+            <details className="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
+              <summary className="cursor-pointer font-bold text-xs text-slate-700 uppercase tracking-wide flex items-center justify-between">
+                <span>Parameter Eksperimen & Urutan Rute Lengkap</span>
+                <span className="text-xs text-slate-400 font-normal">Klik untuk melihat</span>
+              </summary>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 pt-3 border-t border-slate-200">
+                {/* Kolom Hasil A */}
+                <div className="space-y-2 text-xs">
+                  <span className="side-pill side-a font-bold">
+                    Hasil A: {getMethodDisplayName(runA)}
+                  </span>
+                  <div className="bg-white p-2.5 rounded border border-slate-200 space-y-1">
+                    <div>
+                      <strong>Konfigurasi:</strong>
+                    </div>
+                    {runA.category === "metaheuristic" ? (
+                      <div>
+                        {runA.config.algorithm === "TS" ? (
+                          <span>Tabu tenure: {runA.config.tenure} · Aspiration aktif</span>
+                        ) : (
+                          <span>
+                            T₀={runA.config.initialTemperature}, α={runA.config.coolingRate}, Seed=
+                            {runA.config.seed}, Tmin={runA.config.minimumTemperature ?? 0.001}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div>Metode awal: {runA.config.initialMethod}</div>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block mb-0.5">
+                      Rute Kunjungan Terbaik Akhir:
+                    </span>
+                    <div className="font-mono text-[11px] bg-white p-2 rounded border border-slate-200 overflow-x-auto whitespace-nowrap">
+                      {closedRoute(runA.bestRoute, runA.dataset).join(" → ")}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Kolom Hasil B */}
+                <div className="space-y-2 text-xs">
+                  {runB ? (
+                    <>
+                      <span className="side-pill side-b font-bold">
+                        Hasil B: {getMethodDisplayName(runB)}
+                      </span>
+                      <div className="bg-white p-2.5 rounded border border-slate-200 space-y-1">
+                        <div>
+                          <strong>Konfigurasi:</strong>
+                        </div>
+                        {runB.category === "metaheuristic" ? (
+                          <div>
+                            {runB.config.algorithm === "TS" ? (
+                              <span>Tabu tenure: {runB.config.tenure} · Aspiration aktif</span>
+                            ) : (
+                              <span>
+                                T₀={runB.config.initialTemperature}, α={runB.config.coolingRate},
+                                Seed={runB.config.seed}, Tmin=
+                                {runB.config.minimumTemperature ?? 0.001}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <div>Metode awal: {runB.config.initialMethod}</div>
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block mb-0.5">
+                          Rute Kunjungan Terbaik Akhir:
+                        </span>
+                        <div className="font-mono text-[11px] bg-white p-2 rounded border border-slate-200 overflow-x-auto whitespace-nowrap">
+                          {closedRoute(runB.bestRoute, runB.dataset).join(" → ")}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-slate-400 italic py-4">
+                      Hasil B belum dipilih. Parameter Hasil B akan tampil di sini setelah dipilih.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </details>
+          )}
+
+          {/* 6. Bagian Riwayat Pendukung: Semua Hasil Eksperimen */}
+          <details
+            className="mt-6 p-4 bg-white rounded-xl border border-slate-200 shadow-sm"
+            open={showAllHistory}
+            onToggle={(e) => setShowAllHistory((e.target as HTMLDetailsElement).open)}
+          >
+            <summary className="cursor-pointer font-bold text-sm text-slate-800 flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <span>Semua hasil eksperimen</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                  {runs.length} hasil
+                </span>
+              </span>
+              <span className="text-xs text-slate-500 font-normal">
+                {showAllHistory
+                  ? "Tutup daftar riwayat"
+                  : "Klik untuk membuka seluruh riwayat sesi"}
+              </span>
+            </summary>
+
+            <div className="table-scroll mt-3">
+              <table className="comparison-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Metode & Kategori</th>
+                    <th>Dataset</th>
+                    <th>Jarak Akhir</th>
+                    <th>Perbaikan</th>
+                    <th>Durasi Total</th>
+                    <th>Aksi Eksplisit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runs.map((item, idx) => {
+                    const isRunA = item.id === runA?.id;
+                    const isRunB = item.id === runB?.id;
+                    const catInfo = getCategoryBadge(item.category);
+                    const isConstruction = item.category === "construction";
+                    const isNoChange =
+                      !isConstruction && Math.abs(item.initialCost - item.bestCost) <= EPSILON;
+                    const isImproved =
+                      !isConstruction && item.initialCost > item.bestCost + EPSILON;
+                    const rawImpr = isConstruction
+                      ? null
+                      : item.initialCost === 0
+                        ? 0
+                        : ((item.initialCost - item.bestCost) / item.initialCost) * 100;
+
+                    return (
+                      <tr
+                        key={item.id}
+                        className={`${isRunA ? "bg-teal-50/40" : isRunB ? "bg-amber-50/40" : ""}`}
+                      >
+                        <td>
+                          <span className="text-xs font-bold text-slate-600">
+                            #{runs.length - idx}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span
+                              className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${catInfo.badgeClass}`}
+                            >
+                              {catInfo.label}
+                            </span>
+                            {isRunA && <span className="side-pill side-a">A</span>}
+                            {isRunB && <span className="side-pill side-b">B</span>}
+                          </div>
+                          <strong className="text-xs block text-slate-800">
+                            {getMethodDisplayName(item)}
+                          </strong>
+                        </td>
+                        <td>
+                          <span className="text-xs font-medium">{item.dataset.name}</span>
+                          <small className="block text-[11px] text-slate-500">
+                            {item.dataset.nodes.length} node
+                          </small>
+                        </td>
+                        <td>
+                          <strong className="best-cell font-tabular text-xs">
+                            {formatDistance(item.bestCost)}
+                          </strong>
+                        </td>
+                        <td>
+                          {isConstruction ? (
+                            <span className="text-slate-400 font-mono text-xs">—</span>
+                          ) : isNoChange ? (
+                            <span className="text-xs text-slate-500">0,00%</span>
+                          ) : isImproved ? (
+                            <span className="improvement-badge text-xs">
+                              <TrendingDown size={11} /> {formatPercent(rawImpr!)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-mono text-xs">—</span>
+                          )}
+                        </td>
+                        <td>
+                          <span className="font-tabular text-xs text-slate-700">
+                            {formatDuration(item.durations?.totalMs ?? item.durationMs)}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant={isRunA ? "primary" : "outline"}
+                              disabled={isRunA}
+                              onClick={() => handleSelectA(item.id)}
+                              title="Jadikan sebagai Hasil A untuk perbandingan"
+                            >
+                              Pilih sbg A
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={isRunB ? "secondary" : "outline"}
+                              disabled={isRunB}
+                              onClick={() => handleSelectB(item.id)}
+                              title="Jadikan sebagai Hasil B untuk perbandingan"
+                            >
+                              Pilih sbg B
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setRunAId(item.id);
+                                setDetailSource("A");
+                                setTab("trace");
+                              }}
+                              title="Lihat detail lengkap run ini"
+                            >
+                              <Activity size={13} /> Detail
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                onSelectRun(item.id);
+                                onBackToPlayground();
+                              }}
+                              title="Tampilkan di kanvas playground"
+                            >
+                              <Eye size={13} /> Kanvas
+                            </Button>
+                            <button
+                              type="button"
+                              className="delete-run-icon-btn"
+                              aria-label={`Hapus Run #${runs.length - idx}`}
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    `Apakah Anda yakin ingin menghapus Run #${runs.length - idx}?`,
+                                  )
+                                ) {
+                                  onRemoveRun(item.id);
+                                }
+                              }}
+                              title="Hapus run ini dari riwayat"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </div>
       )}
 
-      {/* Tab 2: Trace & Detail View */}
-      {tab === "trace" && run && (
+      {/* =========================================================================
+          TAB 2: DETAIL & TRACE REPLAY VIEW
+          ========================================================================= */}
+      {tab === "trace" && detailRun && (
         <div className="space-y-4">
-          {/* Run Selector Pills Bar */}
-          <div className="panel run-selector-panel">
-            <div className="flex items-center justify-between mb-2">
-              <span className="eyebrow">PILIH EKSPERIMEN UNTUK DIANALISIS</span>
-              <span className="text-xs text-slate-500">Klik salah satu untuk beralih</span>
-            </div>
-            <div className="run-chips-bar">
-              {runs.map((r, i) => {
-                const isSelected = r.id === run.id;
-                const cat = getCategoryBadge(r.category);
-                return (
-                  <button
-                    key={r.id}
-                    type="button"
-                    className={`run-chip-btn ${isSelected ? "active" : ""}`}
-                    onClick={() => {
-                      setSelectedRunId(r.id);
-                      onSelectRun(r.id);
-                    }}
-                  >
-                    <span className={`chip-badge ${cat.badgeClass}`}>
-                      #{runs.length - i} {getMethodShortLabel(r)}
-                    </span>
-                    <span className="chip-cost font-tabular">{formatDistance(r.bestCost)}</span>
-                    {isSelected && <CheckCircle2 size={13} className="chip-check" />}
-                  </button>
-                );
-              })}
-            </div>
+          {/* Sub-selector Detail Hasil A vs Hasil B */}
+          <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+            {runA && (
+              <button
+                type="button"
+                className={`detail-source-toggle-btn ${detailSource === "A" ? "active" : ""}`}
+                onClick={() => setDetailSource("A")}
+              >
+                <span className="font-bold mr-1">Detail Hasil A:</span>
+                <span>{getMethodDisplayName(runA)}</span>
+                <span className="font-tabular ml-1.5 opacity-80">
+                  ({formatDistance(runA.bestCost)})
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              className={`detail-source-toggle-btn ${detailSource === "B" ? "active" : ""}`}
+              onClick={() => setDetailSource("B")}
+              disabled={!runB}
+              title={
+                !runB ? "Pilih Hasil B di tab Perbandingan untuk melihat detailnya" : undefined
+              }
+            >
+              <span className="font-bold mr-1">Detail Hasil B:</span>
+              <span>{runB ? getMethodDisplayName(runB) : "(Hasil B Belum Dipilih)"}</span>
+              {runB && (
+                <span className="font-tabular ml-1.5 opacity-80">
+                  ({formatDistance(runB.bestCost)})
+                </span>
+              )}
+            </button>
           </div>
 
-          {/* Construction Run Detail Card */}
-          {run.category === "construction" && (
+          {/* Construction Run Detail */}
+          {detailRun.category === "construction" && (
             <div className="panel">
               <div className="section-heading">
                 <div>
-                  <span className="eyebrow">
-                    RUN #{runs.length - runs.findIndex((r) => r.id === run.id)} DARI {runs.length}{" "}
-                    EKSPERIMEN
-                  </span>
+                  <span className="eyebrow">DETAIL HASIL {detailSource} · METODE KONSTRUKSI</span>
                   <h3 className="flex items-center gap-2">
-                    <span>{getMethodDisplayName(run)}</span>
-                    <span className="text-sm font-normal text-slate-500">· {run.dataset.name}</span>
+                    <span>{getMethodDisplayName(detailRun)}</span>
+                    <span className="text-sm font-normal text-slate-500">
+                      · {detailRun.dataset.name}
+                    </span>
                   </h3>
                 </div>
                 <div className="flex items-center gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => exportRun(detailRun)}>
+                    <Download size={14} /> Ekspor JSON
+                  </Button>
                   <Button
                     size="sm"
                     onClick={() => {
-                      onSelectRun(run.id);
+                      onSelectRun(detailRun.id);
                       onBackToPlayground();
                     }}
                   >
-                    <Eye size={14} /> Lihat di Kanvas
+                    <Eye size={14} /> Tampilkan Hasil {detailSource} di Kanvas
                   </Button>
                 </div>
               </div>
@@ -601,27 +1510,27 @@ export function ReportView({
                 <div className="metric-cell primary">
                   <span className="metric-label">Jarak Total Rute</span>
                   <strong className="metric-value font-tabular">
-                    {formatDistance(run.bestCost)}
+                    {formatDistance(detailRun.bestCost)}
                   </strong>
-                  <small className="metric-sub">{run.dataset.unit}</small>
+                  <small className="metric-sub">{detailRun.dataset.unit}</small>
                 </div>
                 <div className="metric-cell">
                   <span className="metric-label">Titik Awal (Start Node)</span>
-                  <strong className="metric-value">Node {run.config.startId}</strong>
-                  <small className="metric-sub">{run.config.initialMethod}</small>
+                  <strong className="metric-value">Node {detailRun.config.startId}</strong>
+                  <small className="metric-sub">{detailRun.config.initialMethod}</small>
                 </div>
                 <div className="metric-cell">
                   <span className="metric-label">Ukuran Rute</span>
-                  <strong className="metric-value">{run.bestRoute.length} titik</strong>
+                  <strong className="metric-value">{detailRun.bestRoute.length} titik</strong>
                   <small className="metric-sub">Siklus tertutup</small>
                 </div>
                 <div className="metric-cell">
                   <span className="metric-label">Waktu Konstruksi</span>
                   <strong className="metric-value font-tabular">
-                    {formatDuration(run.durations?.constructionMs ?? run.durationMs)}
+                    {formatDuration(detailRun.durations?.constructionMs ?? detailRun.durationMs)}
                   </strong>
                   <small className="metric-sub">
-                    {stopLabels[run.stopReason] ?? run.stopReason}
+                    {stopLabels[detailRun.stopReason] ?? detailRun.stopReason}
                   </small>
                 </div>
               </div>
@@ -631,40 +1540,43 @@ export function ReportView({
                   Urutan Kunjungan Node
                 </h4>
                 <div className="font-mono text-xs text-slate-800 bg-white p-3 rounded-lg border border-slate-200 overflow-x-auto whitespace-nowrap">
-                  {closedRoute(run.bestRoute, run.dataset).join(" → ")}
+                  {closedRoute(detailRun.bestRoute, detailRun.dataset).join(" → ")}
                 </div>
                 <p className="text-xs text-slate-500 mt-2">
                   Metode konstruksi membentuk rute lengkap secara deterministik langsung dari
-                  himpunan titik tanpa iterasi pertukaran (move). Rute ini dapat dijadikan baseline
-                  murni atau solusi awal untuk optimasi lanjutan (Local Search / Metaheuristik).
+                  himpunan titik tanpa iterasi pertukaran (move).
                 </p>
               </div>
             </div>
           )}
 
-          {/* Local Search Run Detail Card */}
-          {run.category === "local-search" && (
+          {/* Local Search Run Detail */}
+          {detailRun.category === "local-search" && (
             <div className="panel">
               <div className="section-heading">
                 <div>
                   <span className="eyebrow">
-                    RUN #{runs.length - runs.findIndex((r) => r.id === run.id)} DARI {runs.length}{" "}
-                    EKSPERIMEN
+                    DETAIL HASIL {detailSource} · LOCAL SEARCH DESCENT
                   </span>
                   <h3 className="flex items-center gap-2">
-                    <span>{getMethodDisplayName(run)}</span>
-                    <span className="text-sm font-normal text-slate-500">· {run.dataset.name}</span>
+                    <span>{getMethodDisplayName(detailRun)}</span>
+                    <span className="text-sm font-normal text-slate-500">
+                      · {detailRun.dataset.name}
+                    </span>
                   </h3>
                 </div>
                 <div className="flex items-center gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => exportRun(detailRun)}>
+                    <Download size={14} /> Ekspor JSON
+                  </Button>
                   <Button
                     size="sm"
                     onClick={() => {
-                      onSelectRun(run.id);
+                      onSelectRun(detailRun.id);
                       onBackToPlayground();
                     }}
                   >
-                    <Eye size={14} /> Lihat di Kanvas
+                    <Eye size={14} /> Tampilkan Hasil {detailSource} di Kanvas
                   </Button>
                 </div>
               </div>
@@ -673,31 +1585,31 @@ export function ReportView({
                 <div className="metric-cell primary">
                   <span className="metric-label">Jarak Akhir Terbaik</span>
                   <strong className="metric-value font-tabular">
-                    {formatDistance(run.bestCost)}
+                    {formatDistance(detailRun.bestCost)}
                   </strong>
-                  <small className="metric-sub">{run.dataset.unit}</small>
+                  <small className="metric-sub">{detailRun.dataset.unit}</small>
                 </div>
                 <div className="metric-cell">
-                  <span className="metric-label">Jarak Rute Dasar</span>
+                  <span className="metric-label">Jarak Solusi Awal</span>
                   <strong className="metric-value font-tabular">
-                    {formatDistance(run.initialCost)}
+                    {formatDistance(detailRun.initialCost)}
                   </strong>
-                  <small className="metric-sub">Basis: {run.config.initialMethod}</small>
+                  <small className="metric-sub">{detailRun.config.initialMethod}</small>
                 </div>
                 <div className="metric-cell">
-                  <span className="metric-label">Langkah Perbaikan</span>
-                  <strong className="metric-value">{run.iterations} langkah</strong>
+                  <span className="metric-label">Total Langkah Perbaikan</span>
+                  <strong className="metric-value">{detailRun.iterations} langkah</strong>
                   <small className="metric-sub">
-                    {run.evaluations.toLocaleString("id-ID")} kandidat dievaluasi
+                    {detailRun.evaluations.toLocaleString("id-ID")} kandidat dievaluasi
                   </small>
                 </div>
                 <div className="metric-cell">
                   <span className="metric-label">Durasi Komputasi</span>
                   <strong className="metric-value font-tabular">
-                    {formatDuration(run.durations?.totalMs ?? run.durationMs)}
+                    {formatDuration(detailRun.durations?.totalMs ?? detailRun.durationMs)}
                   </strong>
                   <small className="metric-sub">
-                    {stopLabels[run.stopReason] ?? run.stopReason}
+                    {stopLabels[detailRun.stopReason] ?? detailRun.stopReason}
                   </small>
                 </div>
               </div>
@@ -709,9 +1621,9 @@ export function ReportView({
                   </h4>
                   <span className="improvement-badge text-xs">
                     Perbaikan:{" "}
-                    {(run.initialCost === 0
+                    {(detailRun.initialCost === 0
                       ? 0
-                      : ((run.initialCost - run.bestCost) / run.initialCost) * 100
+                      : ((detailRun.initialCost - detailRun.bestCost) / detailRun.initialCost) * 100
                     ).toFixed(2)}
                     %
                   </span>
@@ -719,97 +1631,92 @@ export function ReportView({
                 <div className="text-xs space-y-1.5 text-slate-700">
                   <div>
                     <span className="text-slate-500">
-                      Rute Dasar ({run.config.initialMethod}):{" "}
+                      Rute Dasar ({detailRun.config.initialMethod}):{" "}
                     </span>
                     <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {closedRoute(run.initialRoute, run.dataset).join(" → ")}
+                      {closedRoute(detailRun.initialRoute, detailRun.dataset).join(" → ")}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-500">Rute Hasil Perbaikan: </span>
                     <span className="font-mono bg-teal-50 text-teal-900 px-2 py-0.5 rounded border border-teal-200">
-                      {closedRoute(run.bestRoute, run.dataset).join(" → ")}
+                      {closedRoute(detailRun.bestRoute, detailRun.dataset).join(" → ")}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {run.trace.length > 0 && (
+              {detailRun.trace.length > 0 && (
                 <div className="mt-4">
-                  <CostConvergenceChart run={run} compareRun={null} />
+                  <CostConvergenceChart run={detailRun} compareRun={null} />
                   <TraceReplayViewer
-                    run={run}
+                    run={detailRun}
                     selectedStep={selectedStep}
                     onSelectStep={setSelectedStep}
                   />
                   <TraceTableComponent
-                    run={run}
+                    key={detailRun.id}
+                    run={detailRun}
                     selected={selectedStep}
                     onSelect={setSelectedStep}
                   />
-                  {selectedStep >= 0 && run.trace[selectedStep] && (
-                    <TraceDetailsComponent step={run.trace[selectedStep]!} dataset={run.dataset} />
+                  {selectedStep >= 0 && detailRun.trace[selectedStep] && (
+                    <TraceDetailsComponent
+                      step={detailRun.trace[selectedStep]!}
+                      dataset={detailRun.dataset}
+                    />
                   )}
                 </div>
               )}
             </div>
           )}
 
-          {/* Metaheuristic Run Detail Card */}
-          {run.category === "metaheuristic" && (
+          {/* Metaheuristic Run Detail */}
+          {detailRun.category === "metaheuristic" && (
             <>
               <div className="panel">
                 <div className="section-heading">
                   <div>
                     <span className="eyebrow">
-                      RUN #{runs.length - runs.findIndex((r) => r.id === run.id)} DARI {runs.length}{" "}
-                      EKSPERIMEN
+                      DETAIL HASIL {detailSource} ·{" "}
+                      {detailRun.config.algorithm === "TS" ? "TABU SEARCH" : "SIMULATED ANNEALING"}
                     </span>
                     <h3 className="flex items-center gap-2">
-                      <span>{getMethodTitle(run)}</span>
+                      <span>{getMethodDisplayName(detailRun)}</span>
                       <span className="text-sm font-normal text-slate-500">
-                        · {run.dataset.name}
+                        · {detailRun.dataset.name}
                       </span>
                     </h3>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => exportRun(detailRun)}>
+                      <Download size={14} /> Ekspor JSON
+                    </Button>
                     <Button
                       size="sm"
                       onClick={() => {
-                        onSelectRun(run.id);
+                        onSelectRun(detailRun.id);
                         onBackToPlayground();
                       }}
                     >
-                      <Eye size={14} /> Lihat di Kanvas
+                      <Eye size={14} /> Tampilkan Hasil {detailSource} di Kanvas
                     </Button>
                   </div>
                 </div>
 
-                {/* Parameter Banner */}
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 mb-4 flex flex-wrap gap-x-4 gap-y-1">
+                <div className="flex items-center gap-4 text-xs text-slate-600 my-2 flex-wrap">
                   <span>
-                    <strong>Metode:</strong>{" "}
-                    {run.config.algorithm === "TS" ? "Tabu Search" : "Simulated Annealing"}
+                    <strong>Batas Iterasi:</strong> {detailRun.config.maxIterations}
                   </span>
-                  <span>
-                    <strong>Solusi Awal:</strong> {run.config.initialMethod}{" "}
-                    {run.config.improve && run.config.improve !== "none"
-                      ? `+ ${run.config.improve}`
-                      : ""}{" "}
-                    (Start: {run.config.startId})
-                  </span>
-                  <span>
-                    <strong>Batas Iterasi:</strong> {run.config.maxIterations}
-                  </span>
-                  {run.config.algorithm === "TS" ? (
+                  {detailRun.config.algorithm === "TS" ? (
                     <span>
-                      <strong>Tabu Tenure:</strong> {run.config.tenure} · Aspiration aktif
+                      <strong>Tabu Tenure:</strong> {detailRun.config.tenure} · Aspiration aktif
                     </span>
                   ) : (
                     <span>
-                      <strong>SA Params:</strong> T₀={run.config.initialTemperature}, α=
-                      {run.config.coolingRate}, Seed={run.config.seed}, Tmin=
-                      {run.config.minimumTemperature ?? 0.001}
+                      <strong>SA Params:</strong> T₀={detailRun.config.initialTemperature}, α=
+                      {detailRun.config.coolingRate}, Seed={detailRun.config.seed}, Tmin=
+                      {detailRun.config.minimumTemperature ?? 0.001}
                     </span>
                   )}
                 </div>
@@ -818,31 +1725,31 @@ export function ReportView({
                   <div className="metric-cell primary">
                     <span className="metric-label">Jarak Akhir Terbaik</span>
                     <strong className="metric-value font-tabular">
-                      {formatDistance(run.bestCost)}
+                      {formatDistance(detailRun.bestCost)}
                     </strong>
-                    <small className="metric-sub">{run.dataset.unit}</small>
+                    <small className="metric-sub">{detailRun.dataset.unit}</small>
                   </div>
                   <div className="metric-cell">
                     <span className="metric-label">Jarak Solusi Awal</span>
                     <strong className="metric-value font-tabular">
-                      {formatDistance(run.initialCost)}
+                      {formatDistance(detailRun.initialCost)}
                     </strong>
-                    <small className="metric-sub">{run.config.initialMethod}</small>
+                    <small className="metric-sub">{detailRun.config.initialMethod}</small>
                   </div>
                   <div className="metric-cell">
                     <span className="metric-label">Total Evaluasi</span>
                     <strong className="metric-value">
-                      {run.evaluations.toLocaleString("id-ID")}
+                      {detailRun.evaluations.toLocaleString("id-ID")}
                     </strong>
-                    <small className="metric-sub">{run.iterations} iterasi</small>
+                    <small className="metric-sub">{detailRun.iterations} iterasi</small>
                   </div>
                   <div className="metric-cell">
                     <span className="metric-label">Durasi Komputasi</span>
                     <strong className="metric-value font-tabular">
-                      {formatDuration(run.durations?.totalMs ?? run.durationMs)}
+                      {formatDuration(detailRun.durations?.totalMs ?? detailRun.durationMs)}
                     </strong>
                     <small className="metric-sub">
-                      {stopLabels[run.stopReason] ?? run.stopReason}
+                      {stopLabels[detailRun.stopReason] ?? detailRun.stopReason}
                     </small>
                   </div>
                 </div>
@@ -852,108 +1759,52 @@ export function ReportView({
                   <div>
                     <span className="text-slate-500 font-medium">Rute Solusi Awal: </span>
                     <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {closedRoute(run.initialRoute, run.dataset).join(" → ")}
+                      {closedRoute(detailRun.initialRoute, detailRun.dataset).join(" → ")}
                     </span>
                   </div>
                   <div>
                     <span className="text-teal-700 font-medium">Rute Terbaik Akhir: </span>
                     <span className="font-mono bg-teal-50 text-teal-900 px-2 py-0.5 rounded border border-teal-200">
-                      {closedRoute(run.bestRoute, run.dataset).join(" → ")}
+                      {closedRoute(detailRun.bestRoute, detailRun.dataset).join(" → ")}
                     </span>
                   </div>
                 </div>
 
-                {/* Compare With Secondary Run Option */}
-                {runs.length > 1 && (
-                  <div className="space-y-2 my-3 p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-xs">
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1.5 font-medium text-slate-700 whitespace-nowrap">
-                        <GitCompare size={15} className="text-teal-700" />
-                        <span>Bandingkan kurva:</span>
-                      </div>
-                      <div className="max-w-xs flex-1">
-                        <Select
-                          value={compareRunId}
-                          onChange={(val) => setCompareRunId(val)}
-                          placeholder="Pilih run pembanding..."
-                          options={[
-                            { value: "", label: "(Tanpa pembanding)" },
-                            ...runs
-                              .filter((r) => r.id !== run.id && r.trace.length > 0)
-                              .map((r) => {
-                                const runNumber =
-                                  runs.length - runs.findIndex((x) => x.id === r.id);
-                                const isSameDataset = r.dataset.id === run.dataset.id;
-                                const isSameInitial = areRoutesIdentical(
-                                  r.initialRoute,
-                                  run.initialRoute,
-                                );
-                                const tag =
-                                  isSameDataset && isSameInitial
-                                    ? " [Sebanding]"
-                                    : isSameDataset
-                                      ? " [Beda Rute]"
-                                      : " [Beda Dataset]";
-                                return {
-                                  value: r.id,
-                                  label: `Run #${runNumber}: ${getMethodDisplayName(r)} (${formatDistance(r.bestCost)})${tag}`,
-                                  badge: r.config.algorithm,
-                                };
-                              }),
-                          ]}
-                        />
-                      </div>
-                      {compareRunId && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setCompareRunId("")}
-                          className="text-xs text-red-600 hover:bg-red-50"
-                        >
-                          Batal bandingkan
-                        </Button>
-                      )}
-                    </div>
-
-                    {compareRun && compareRun.dataset.id !== run.dataset.id && (
-                      <div className="p-2 bg-amber-50 border border-amber-200 rounded text-amber-800 flex items-center gap-2">
-                        <AlertTriangle size={14} className="text-amber-600 shrink-0" />
-                        <span>
-                          <strong>Peringatan Kondisi:</strong> Run pembanding #
-                          {runs.length - runs.findIndex((x) => x.id === compareRun.id)} menggunakan
-                          dataset berbeda ({compareRun.dataset.name} vs {run.dataset.name}). Skala
-                          sumbu biaya tidak ekuivalen.
-                        </span>
-                      </div>
-                    )}
-
-                    {compareRun &&
-                      compareRun.dataset.id === run.dataset.id &&
-                      !areRoutesIdentical(compareRun.initialRoute, run.initialRoute) && (
-                        <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-800 flex items-center gap-2">
-                          <Info size={14} className="text-blue-600 shrink-0" />
-                          <span>
-                            <strong>Catatan:</strong> Run pembanding #
-                            {runs.length - runs.findIndex((x) => x.id === compareRun.id)}{" "}
-                            menggunakan rute awal berbeda.
-                          </span>
-                        </div>
-                      )}
+                {/* Convergence Chart comparing A and B directly */}
+                {runA && (
+                  <div className="mt-4">
+                    <CostConvergenceChart
+                      run={detailRun}
+                      compareRun={
+                        detailSource === "A" && runB
+                          ? runB
+                          : detailSource === "B" && runA
+                            ? runA
+                            : null
+                      }
+                    />
                   </div>
                 )}
-
-                <CostConvergenceChart run={run} compareRun={compareRun} />
               </div>
 
+              {/* Trace Replay Panel */}
               <div className="panel">
                 <TraceReplayViewer
-                  run={run}
+                  run={detailRun}
                   selectedStep={selectedStep}
                   onSelectStep={setSelectedStep}
                 />
-                <TraceTableComponent run={run} selected={selectedStep} onSelect={setSelectedStep} />
-                {selectedStep >= 0 && run.trace[selectedStep] && (
-                  <TraceDetailsComponent step={run.trace[selectedStep]!} dataset={run.dataset} />
+                <TraceTableComponent
+                  key={detailRun.id}
+                  run={detailRun}
+                  selected={selectedStep}
+                  onSelect={setSelectedStep}
+                />
+                {selectedStep >= 0 && detailRun.trace[selectedStep] && (
+                  <TraceDetailsComponent
+                    step={detailRun.trace[selectedStep]!}
+                    dataset={detailRun.dataset}
+                  />
                 )}
               </div>
             </>
@@ -961,45 +1812,92 @@ export function ReportView({
         </div>
       )}
 
-      {/* Tab 3: Interactive Distance Matrix */}
+      {/* =========================================================================
+      {/* =========================================================================
+          TAB 3: MATRIKS JARAK ANTAR NODE (DENGAN SUMBER FLEKSIBEL)
+          ========================================================================= */}
       {tab === "matrix" && (
-        <div className="panel">
-          <div className="section-heading">
+        <div className="panel report-panel distance-matrix-panel">
+          <div className="section-heading mb-3">
             <div>
-              <span className="eyebrow">PENGUKURAN JARAK EUCLIDEAN</span>
-              <h3>Matriks Jarak Antar Node</h3>
-            </div>
-
-            <div className="matrix-origin-toggle">
-              <span className="text-xs text-slate-500 mr-2">Sumber Data:</span>
-              <button
-                type="button"
-                className={`origin-btn ${matrixSource === "canvas" ? "active" : ""}`}
-                onClick={() => setMatrixSource("canvas")}
-              >
-                ● Kanvas Terkini ({currentDataset.nodes.length} Node)
-              </button>
-              {run && (
-                <button
-                  type="button"
-                  className={`origin-btn ${matrixSource === "run" ? "active" : ""}`}
-                  onClick={() => setMatrixSource("run")}
-                >
-                  ○ Run #{runs.length - runs.findIndex((r) => r.id === run.id)} (
-                  {run.dataset.nodes.length} Node)
-                </button>
-              )}
+              <h3 className="section-title">Matriks jarak</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Matriks simetris jarak Euclidean planar antar setiap pasangan simpul (node) pada
+                dataset.
+              </p>
             </div>
           </div>
 
-          <InteractiveMatrixComponent
-            dataset={matrixSource === "canvas" ? currentDataset : (run?.dataset ?? currentDataset)}
-            sourceLabel={
-              matrixSource === "canvas"
-                ? `Dataset Terkini pada Kanvas (${currentDataset.name})`
-                : `Dataset yang digunakan pada Run #${runs.length - runs.findIndex((r) => r.id === run?.id)} (${run?.dataset.name})`
-            }
-          />
+          {/* 2. Field Sumber matriks dan metadata */}
+          <div className="matrix-source-control-group mb-3">
+            <span className="text-xs font-semibold text-slate-700 block mb-1">Sumber matriks:</span>
+            <Select
+              value={matrixSource}
+              onChange={(val) => setMatrixSource(val as "A" | "B" | "canvas")}
+              options={matrixSourceOptions}
+            />
+
+            {activeMatrixDataset && (
+              <div className="matrix-source-metadata">
+                <div>
+                  <span className="text-slate-400 mr-1">Dataset:</span>
+                  <strong className="text-slate-800">{activeMatrixDataset.name}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 mr-1">Jumlah:</span>
+                  <strong className="text-slate-800 font-tabular">
+                    {activeMatrixDataset.nodes.length} node
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 mr-1">Sifat data:</span>
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200/70 text-slate-700">
+                    {activeSourceType === "snapshot" ? "Snapshot tersimpan" : "Data kerja aktif"}
+                  </span>
+                </div>
+                <div className="w-full text-[11px] text-slate-500 mt-0.5">{activeSourceDetail}</div>
+              </div>
+            )}
+
+            {!runB && (
+              <p className="text-[11px] text-slate-400 mt-1">
+                Hasil B belum dipilih di tab Perbandingan, sehingga belum tersedia sebagai pilihan
+                sumber.
+              </p>
+            )}
+          </div>
+
+          {/* 3. Pesan kesamaan A/B hanya jika telah diverifikasi isDatasetIdentical */}
+          {runA && runB && isDatasetIdentical(runA.dataset, runB.dataset) && (
+            <div className="p-2.5 bg-teal-50 border border-teal-200 rounded-lg text-teal-800 text-xs mb-3 flex items-center gap-2">
+              <Info size={14} className="text-teal-600 shrink-0" />
+              <span>
+                Dataset pada Hasil A dan Hasil B terverifikasi identik ({runA.dataset.nodes.length}{" "}
+                node, koordinat sama). Matriks jarak kedua hasil bernilai sama.
+              </span>
+            </div>
+          )}
+
+          {/* 4. Ringkasan Model Jarak */}
+          <div className="matrix-model-summary">
+            <span className="font-semibold text-slate-700">Model jarak:</span> Euclidean planar
+            <span className="text-slate-300">·</span>
+            <span className="font-semibold text-slate-700">Satuan:</span> unit koordinat (
+            {activeMatrixDataset?.unit ?? "unit"})
+          </div>
+
+          {/* 5 & 6. Matriks dalam wadah scroll sendiri dan Panel Formula */}
+          {activeMatrixDataset ? (
+            <InteractiveMatrixComponent
+              dataset={activeMatrixDataset}
+              sourceLabel={activeSourceTitle}
+            />
+          ) : (
+            <div className="p-6 text-center text-slate-400 italic bg-slate-50 rounded-lg border border-slate-200">
+              Sumber matriks yang dipilih tidak tersedia atau telah dihapus. Silakan pilih sumber
+              matriks lain.
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1085,7 +1983,7 @@ function CostConvergenceChart({
         />
         <path d={line(run, sampled, "bestCost")} fill="none" stroke="#147469" strokeWidth="2.5" />
 
-        {/* Secondary Comparison Run (if selected) */}
+        {/* Secondary Comparison Run */}
         {compareRun && (
           <path
             d={line(compareRun, compareSampled, "bestCost")}
@@ -1099,11 +1997,8 @@ function CostConvergenceChart({
         <text x="30" y="114" fontSize="10">
           Iterasi 0
         </text>
-        <text x="670" y="114" textAnchor="end" fontSize="10">
-          {maxIters} iterasi
-        </text>
-        <text x="3" y="23" fontSize="10">
-          {max.toFixed(1)}
+        <text x="640" y="114" fontSize="10">
+          Max {maxIters}
         </text>
       </svg>
     </div>
@@ -1175,111 +2070,156 @@ function TraceReplayViewer({
 
   return (
     <div className="trace-replay-card">
-      <div className="trace-replay-header">
+      {/* Mode Bar */}
+      <div className="replay-mode-bar">
         <div className="flex items-center gap-2">
-          <span className="eyebrow">REPLAY TRACE ITERASI</span>
-          <span className="replay-step-pill">
-            Iterasi #{step.iteration} dari {run.trace.length}
-          </span>
-          <span
-            className={`decision-badge px-2 py-0.5 rounded text-xs font-semibold border ${
-              isAspiration
-                ? "bg-purple-100 text-purple-800 border-purple-300"
-                : isAccepted
-                  ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-                  : "bg-rose-100 text-rose-800 border-rose-300"
-            }`}
-          >
-            {isAspiration ? "Aspiration Diterima" : isAccepted ? "Diterima" : "Ditolak"}
+          {isReplaying ? (
+            <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+              Mode: Telusuri Iterasi (Langkah #{activeIndex + 1})
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded text-xs font-semibold bg-teal-100 text-teal-800 border border-teal-200">
+              Mode: Rute Hasil Akhir
+            </span>
+          )}
+          <span className="text-xs text-slate-500 font-tabular">
+            Jarak: {formatDistance(isReplaying ? step.bestCost : run.bestCost)} {run.dataset.unit}
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={activeIndex <= 0}
-            onClick={() => onSelectStep(0)}
-            title="Langkah Pertama"
-          >
-            <SkipBack size={13} />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={activeIndex <= 0}
-            onClick={() => onSelectStep(Math.max(0, activeIndex - 1))}
-            title="Langkah Sebelumnya"
-          >
-            <ChevronLeft size={13} />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={activeIndex >= run.trace.length - 1}
-            onClick={() => onSelectStep(Math.min(run.trace.length - 1, activeIndex + 1))}
-            title="Langkah Berikutnya"
-          >
-            <ChevronRight size={13} />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={activeIndex >= run.trace.length - 1}
-            onClick={() => onSelectStep(run.trace.length - 1)}
-            title="Langkah Terakhir"
-          >
-            <SkipForward size={13} />
-          </Button>
-          {isReplaying && (
+
+        <div>
+          {!isReplaying ? (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => onSelectStep(0)}
+              title="Mulai telusuri keputusan tiap iterasi dari langkah 0"
+            >
+              <Activity size={13} /> Telusuri Iterasi (Langkah 0)
+            </Button>
+          ) : (
             <Button
               size="sm"
               variant="outline"
               onClick={() => onSelectStep(-1)}
-              className="text-xs ml-1"
-              title="Kembali ke rute akhir"
+              title="Kembali ke tampilan rute hasil akhir"
             >
-              <RotateCcw size={12} /> Keluar Replay
+              <RotateCcw size={13} /> Kembali ke hasil akhir
             </Button>
           )}
         </div>
       </div>
 
-      <div className="replay-slider-row">
-        <input
-          type="range"
-          min={0}
-          max={run.trace.length - 1}
-          value={activeIndex}
-          onChange={(e) => onSelectStep(Number(e.target.value))}
-          className="replay-slider"
-          aria-label="Pilih nomor iterasi"
-        />
-      </div>
+      {/* Replay Controls (Hanya aktif dalam mode telusuri iterasi) */}
+      {isReplaying && (
+        <>
+          <div className="trace-replay-header">
+            <div className="flex items-center gap-2">
+              <span className="eyebrow">REPLAY TRACE ITERASI</span>
+              <span className="replay-step-pill">
+                Iterasi #{step.iteration} dari {run.trace.length}
+              </span>
+              <span
+                className={`decision-badge px-2 py-0.5 rounded text-xs font-semibold border ${
+                  isAspiration
+                    ? "bg-purple-100 text-purple-800 border-purple-300"
+                    : isAccepted
+                      ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                      : "bg-rose-100 text-rose-800 border-rose-300"
+                }`}
+              >
+                {isAspiration ? "Aspiration Diterima" : isAccepted ? "Diterima" : "Ditolak"}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={activeIndex <= 0}
+                onClick={() => onSelectStep(0)}
+                title="Langkah Pertama"
+              >
+                <SkipBack size={13} />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={activeIndex <= 0}
+                onClick={() => onSelectStep(Math.max(0, activeIndex - 1))}
+                title="Langkah Sebelumnya"
+              >
+                <ChevronLeft size={13} />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={activeIndex >= run.trace.length - 1}
+                onClick={() => onSelectStep(Math.min(run.trace.length - 1, activeIndex + 1))}
+                title="Langkah Berikutnya"
+              >
+                <ChevronRight size={13} />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={activeIndex >= run.trace.length - 1}
+                onClick={() => onSelectStep(run.trace.length - 1)}
+                title="Langkah Terakhir"
+              >
+                <SkipForward size={13} />
+              </Button>
+            </div>
+          </div>
 
+          <div className="replay-slider-row">
+            <input
+              type="range"
+              min={0}
+              max={run.trace.length - 1}
+              value={activeIndex}
+              onChange={(e) => onSelectStep(Number(e.target.value))}
+              className="replay-slider"
+              aria-label="Pilih nomor iterasi"
+            />
+          </div>
+        </>
+      )}
+
+      {/* Replay Visualization & Details */}
       <div className="replay-content-grid">
         <div className="replay-canvas-wrapper">
-          <svg viewBox="0 0 600 280" className="replay-svg">
-            <defs>
-              <pattern id="replayGrid" width="30" height="30" patternUnits="userSpaceOnUse">
-                <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#f1f5f9" strokeWidth="1" />
-              </pattern>
-            </defs>
-            <rect width="600" height="280" fill="url(#replayGrid)" rx="8" />
+          <svg
+            viewBox="0 0 600 280"
+            className="replay-svg"
+            role="img"
+            aria-label="Visualisasi rute interaktif"
+          >
+            {/* Background Canvas Bounds */}
+            <rect
+              x="5"
+              y="5"
+              width="590"
+              height="270"
+              rx="10"
+              fill="#fafbf8"
+              stroke="#e2e8f0"
+              strokeWidth="1"
+            />
 
-            {/* Layer 1: Initial Route */}
+            {/* Layer 1: Initial Route (Baseline) */}
             {run.initialRoute.length > 2 && (
               <path
                 d={getPathD(run.initialRoute)}
                 fill="none"
                 stroke="#cbd5e1"
-                strokeWidth="1.5"
+                strokeWidth="1.6"
                 strokeDasharray="4 4"
                 opacity="0.8"
               />
             )}
 
-            {/* Layer 2: Current Route */}
-            {current.length > 2 && (
+            {/* Layer 2: Current Route (Hanya tampil saat replay) */}
+            {isReplaying && current.length > 2 && (
               <path
                 d={getPathD(current)}
                 fill="none"
@@ -1290,8 +2230,8 @@ function TraceReplayViewer({
               />
             )}
 
-            {/* Layer 3: Candidate Route */}
-            {candidate && candidate.length > 2 && (
+            {/* Layer 3: Candidate Route (Hanya tampil saat replay) */}
+            {isReplaying && candidate && candidate.length > 2 && (
               <path
                 d={getPathD(candidate)}
                 fill="none"
@@ -1315,103 +2255,168 @@ function TraceReplayViewer({
               />
             )}
 
-            {/* Layer 5: Nodes & IDs */}
+            {/* Layer 5: Node Points & Labels */}
             {nodes.map((node) => {
               const p = project(node.x, node.y);
               const isStart = node.id === run.config.startId;
               return (
-                <g key={node.id}>
-                  {isStart && (
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      r={14}
-                      fill="#ccfbf1"
-                      stroke="#0d9488"
-                      strokeWidth={1.5}
-                      opacity="0.6"
-                    />
-                  )}
+                <g key={node.id} transform={`translate(${p.x}, ${p.y})`}>
                   <circle
-                    cx={p.x}
-                    cy={p.y}
-                    r={isStart ? 9 : 7}
-                    fill={isStart ? "#14b8a6" : "#ffffff"}
-                    stroke={isStart ? "#0f766e" : "#334155"}
-                    strokeWidth={2}
+                    r={isStart ? 7 : 5}
+                    fill={isStart ? "#dc2626" : "#0d9488"}
+                    stroke="#ffffff"
+                    strokeWidth="2"
                   />
                   <text
-                    x={p.x}
-                    y={p.y - 11}
+                    x={0}
+                    y={-10}
                     textAnchor="middle"
-                    className="text-[10px] font-semibold fill-slate-700 pointer-events-none"
+                    fontSize="11"
+                    fontWeight="700"
+                    fill="#1e293b"
+                    className="select-none"
                   >
                     {node.id}
                   </text>
+                  {isStart && (
+                    <text
+                      x={0}
+                      y={16}
+                      textAnchor="middle"
+                      fontSize="9"
+                      fontWeight="600"
+                      fill="#dc2626"
+                    >
+                      Start
+                    </text>
+                  )}
                 </g>
               );
             })}
           </svg>
 
+          {/* Color Legend */}
           <div className="replay-legend">
             <span className="legend-item">
               <span className="legend-line initial" /> Rute Awal
             </span>
+            {isReplaying && (
+              <>
+                <span className="legend-item">
+                  <span className="legend-line current" /> Current (Biru)
+                </span>
+                <span className="legend-item">
+                  <span className="legend-line candidate" /> Kandidat (Oranye)
+                </span>
+              </>
+            )}
             <span className="legend-item">
-              <span className="legend-line current" /> Current
-            </span>
-            <span className="legend-item">
-              <span className="legend-line candidate" /> Kandidat Move
-            </span>
-            <span className="legend-item">
-              <span className="legend-line best" /> Best-so-far
+              <span className="legend-line best" /> Best-so-far (Teal)
             </span>
           </div>
         </div>
 
+        {/* Replay Decision Panel */}
         <div className="replay-info-panel">
-          <div className="metric-cell primary p-2.5">
-            <span className="metric-label">Jarak Kandidat (d_cand)</span>
-            <strong className="metric-value font-tabular">
-              {formatDistance(step.candidateCost)}
-            </strong>
-            <small className="metric-sub">
-              Δ = {step.delta > 0 ? "+" : ""}
-              {formatDistance(step.delta)} {run.dataset.unit}
-            </small>
-          </div>
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2 text-xs">
+            <h5 className="font-bold text-slate-700 uppercase tracking-wide">
+              {isReplaying ? `Evaluasi Iterasi #${step.iteration}` : "Ringkasan Hasil Akhir"}
+            </h5>
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
-              <span className="text-slate-500 block">Current Tour:</span>
-              <strong className="font-tabular text-slate-800">
-                {formatDistance(step.currentCost)}
-              </strong>
-            </div>
-            <div className="p-2 bg-teal-50 border border-teal-200 rounded-lg">
-              <span className="text-teal-700 block">Best-so-far:</span>
-              <strong className="font-tabular text-teal-900">
-                {formatDistance(step.bestCost)}
-              </strong>
-            </div>
-          </div>
-
-          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1">
-            <div className="font-medium text-slate-700">Keputusan Iterasi:</div>
-            <p className="text-slate-600">{step.reason}</p>
-            {run.config.algorithm === "TS" ? (
-              <div className="text-[11px] text-slate-500 pt-1 border-t border-slate-200">
-                <span>
-                  Move 2-OPT ({step.move.i}, {step.move.j}) ·{" "}
-                </span>
-                <span>Tabu: {isTabu ? "Ya" : "Tidak"} · </span>
-                <span>Aspiration: {isAspiration ? "Ya" : "Tidak"}</span>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="p-2 bg-white rounded border border-slate-200">
+                <span className="text-slate-400 block text-[10px]">Jarak Best-so-far:</span>
+                <strong className="text-teal-700 font-tabular">
+                  {formatDistance(isReplaying ? step.bestCost : run.bestCost)}
+                </strong>
               </div>
-            ) : (
-              <div className="text-[11px] text-slate-500 pt-1 border-t border-slate-200 font-mono">
-                <span>T = {formatNumber(step.temperature ?? 0)} · </span>
-                <span>P = {step.probability?.toFixed(6) ?? "—"} · </span>
-                <span>Draw = {step.draw?.toFixed(6) ?? "—"}</span>
+
+              {isReplaying ? (
+                <div className="p-2 bg-white rounded border border-slate-200">
+                  <span className="text-slate-400 block text-[10px]">Jarak Kandidat:</span>
+                  <strong className="text-amber-700 font-tabular">
+                    {formatDistance(step.candidateCost)}
+                  </strong>
+                </div>
+              ) : (
+                <div className="p-2 bg-white rounded border border-slate-200">
+                  <span className="text-slate-400 block text-[10px]">Rute Awal:</span>
+                  <strong className="text-slate-600 font-tabular">
+                    {formatDistance(run.initialCost)}
+                  </strong>
+                </div>
+              )}
+
+              {isReplaying && (
+                <>
+                  <div className="p-2 bg-white rounded border border-slate-200">
+                    <span className="text-slate-400 block text-[10px]">Jarak Current:</span>
+                    <strong className="text-sky-700 font-tabular">
+                      {formatDistance(step.currentCost)}
+                    </strong>
+                  </div>
+                  <div className="p-2 bg-white rounded border border-slate-200">
+                    <span className="text-slate-400 block text-[10px]">
+                      Delta Biaya (Δ = d_cand - d_curr):
+                    </span>
+                    <strong
+                      className={`font-tabular ${
+                        step.candidateCost - step.currentCost < 0
+                          ? "text-emerald-700"
+                          : "text-rose-700"
+                      }`}
+                    >
+                      {step.candidateCost - step.currentCost > 0 ? "+" : ""}
+                      {formatDistance(step.candidateCost - step.currentCost)}
+                    </strong>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {isReplaying && (
+              <div className="p-2 bg-white rounded border border-slate-200 space-y-1">
+                <div>
+                  <span className="text-slate-500">Status Keputusan: </span>
+                  <strong
+                    className={isAccepted || isAspiration ? "text-emerald-700" : "text-rose-700"}
+                  >
+                    {isAspiration
+                      ? "Diterima via Aspiration (Mengalahkan Best)"
+                      : isAccepted
+                        ? "Diterima (Solusi Lebih Baik atau Lolos Uji Probabilitas)"
+                        : "Ditolak"}
+                  </strong>
+                </div>
+
+                {run.config.algorithm === "TS" && (
+                  <div>
+                    <span className="text-slate-500">Status Tabu Move: </span>
+                    <span>
+                      {isTabu ? (
+                        <span className="text-amber-700 font-semibold">
+                          Masuk Tabu List (Tenure: {run.config.tenure})
+                        </span>
+                      ) : (
+                        "Bukan Tabu (Move Eligible)"
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {run.config.algorithm === "SA" && step.temperature !== undefined && (
+                  <div>
+                    <span className="text-slate-500">Suhu Saat Ini (T): </span>
+                    <span className="font-tabular font-mono text-slate-800">
+                      {step.temperature.toFixed(4)}
+                    </span>
+                    {step.probability !== undefined && (
+                      <span className="ml-2 text-slate-500">
+                        (P = {(step.probability * 100).toFixed(1)}%)
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1451,115 +2456,169 @@ function TraceTableComponent({
     );
   }
 
+  const start = safePage * pageSize;
+  const rows = run.trace.slice(start, start + pageSize);
+
   return (
-    <>
-      <div className="trace-toolbar">
-        <span className="small muted">Pilih iterasi untuk melihat keputusan algoritma.</span>
-        <Button variant="ghost" size="sm" disabled={selected < 0} onClick={() => onSelect(-1)}>
-          Reset Pilihan
-        </Button>
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="small muted">
+          Menampilkan baris {start + 1}–{Math.min(run.trace.length, start + pageSize)} dari{" "}
+          {run.trace.length} langkah
+        </span>
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={safePage <= 0}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+          >
+            Prev
+          </Button>
+          <span className="small muted">
+            {safePage + 1} / {totalPages}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={safePage >= totalPages - 1}
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+          >
+            Next
+          </Button>
+        </div>
       </div>
+
       <div className="table-scroll">
         <table className="trace-table">
           <thead>
             <tr>
               <th>Iterasi</th>
-              <th>Move</th>
-              <th>Kandidat</th>
               <th>Current</th>
+              <th>Kandidat</th>
               <th>Best</th>
-              <th>Keputusan</th>
+              <th>Delta</th>
+              <th>Status</th>
+              <th>Alasan</th>
             </tr>
           </thead>
           <tbody>
-            {run.trace.slice(safePage * pageSize, (safePage + 1) * pageSize).map((step, index) => (
-              <tr
-                key={step.iteration}
-                className={selected === safePage * pageSize + index ? "selected-row" : ""}
-              >
-                <td>
-                  <button
-                    type="button"
-                    className="step-button"
-                    onClick={() => onSelect(safePage * pageSize + index)}
-                  >
-                    #{step.iteration}
-                  </button>
-                </td>
-                <td className="mono">
-                  2-OPT ({step.move.i},{step.move.j})
-                </td>
-                <td>{formatNumber(step.candidateCost)}</td>
-                <td>{formatNumber(step.currentCost)}</td>
-                <td className="best-cell">{formatNumber(step.bestCost)}</td>
-                <td>
-                  <span className={`decision ${step.accepted ? "accepted" : "rejected"}`}>
-                    {step.aspiration ? "Aspiration" : step.accepted ? "Diterima" : "Ditolak"}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {rows.map((step, idx) => {
+              const actualIndex = start + idx;
+              const isSelected = selected === actualIndex;
+              const delta = step.candidateCost - step.currentCost;
+              return (
+                <tr
+                  key={actualIndex}
+                  className={isSelected ? "selected-row" : ""}
+                  onClick={() => onSelect(actualIndex)}
+                >
+                  <td>#{step.iteration}</td>
+                  <td>{formatDistance(step.currentCost)}</td>
+                  <td>{formatDistance(step.candidateCost)}</td>
+                  <td className="best-cell">{formatDistance(step.bestCost)}</td>
+                  <td className={delta < 0 ? "impr" : delta > 0 ? "deg" : ""}>
+                    {delta > 0 ? `+${formatDistance(delta)}` : formatDistance(delta)}
+                  </td>
+                  <td>
+                    <span
+                      className={`status-pill ${
+                        step.aspiration
+                          ? "status-aspiration"
+                          : step.accepted
+                            ? "status-accepted"
+                            : "status-rejected"
+                      }`}
+                    >
+                      {step.aspiration ? "Aspiration" : step.accepted ? "Accepted" : "Rejected"}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="reason-cell">{step.reason}</span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      <div className="pagination">
-        <span>
-          {run.trace.length.toLocaleString("id-ID")} langkah · halaman {safePage + 1}/{totalPages}
-        </span>
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={safePage === 0}
-            onClick={() => setPage((v) => Math.max(0, v - 1))}
-          >
-            Sebelumnya
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={safePage + 1 >= totalPages}
-            onClick={() => setPage((v) => Math.min(totalPages - 1, v + 1))}
-          >
-            Berikutnya
-          </Button>
-        </div>
-      </div>
-    </>
+    </div>
   );
 }
 
 function TraceDetailsComponent({ step, dataset }: { step: TraceStep; dataset: Dataset }) {
-  const edgeLabel = (key: string) =>
-    key
-      .split(":")
-      .map((index) => dataset.nodes[Number(index)]?.id ?? index)
-      .join("–");
-
   return (
-    <div className="trace-detail" aria-live="polite">
-      <strong>
-        Iterasi {step.iteration} · Perubahan Biaya (Δ): {formatNumber(step.delta)}
-      </strong>
-      <p>{step.reason}</p>
-      {step.temperature !== undefined ? (
-        <p className="mono small">
-          T = {formatNumber(step.temperature)} · Peluang terima = {step.probability?.toFixed(6)} ·
-          Random draw = {step.draw?.toFixed(6) ?? "tidak diperlukan"}
+    <div className="step-detail-card">
+      <div className="step-detail-header">
+        <span className="step-title">Detail Iterasi #{step.iteration}</span>
+        <span
+          className={`status-pill ${
+            step.aspiration
+              ? "status-aspiration"
+              : step.accepted
+                ? "status-accepted"
+                : "status-rejected"
+          }`}
+        >
+          {step.aspiration ? "Diterima (Aspiration)" : step.accepted ? "Diterima" : "Ditolak"}
+        </span>
+      </div>
+
+      <div className="step-detail-grid">
+        <div className="step-stat">
+          <span className="label">Biaya Current:</span>
+          <strong>{formatDistance(step.currentCost)}</strong>
+        </div>
+        <div className="step-stat">
+          <span className="label">Biaya Kandidat:</span>
+          <strong>{formatDistance(step.candidateCost)}</strong>
+        </div>
+        <div className="step-stat">
+          <span className="label">Biaya Best:</span>
+          <strong className="best-val">{formatDistance(step.bestCost)}</strong>
+        </div>
+        <div className="step-stat">
+          <span className="label">Delta (Kandidat - Current):</span>
+          <strong
+            className={
+              step.candidateCost < step.currentCost
+                ? "text-teal-700"
+                : step.candidateCost > step.currentCost
+                  ? "text-rose-700"
+                  : ""
+            }
+          >
+            {step.candidateCost - step.currentCost > 0 ? "+" : ""}
+            {formatDistance(step.candidateCost - step.currentCost)}
+          </strong>
+        </div>
+      </div>
+
+      <div className="step-notes">
+        <p>
+          <strong>Alasan:</strong> {step.reason}
         </p>
-      ) : (
-        <>
-          <p className="small">
-            Kandidat tabu: {step.tabu ? "Ya" : "Tidak"} · Aspiration:{" "}
-            {step.aspiration ? "Ya" : "Tidak"}
+        {step.temperature !== undefined && (
+          <p>
+            <strong>Suhu SA:</strong> {step.temperature.toFixed(4)}
+            {step.probability !== undefined && (
+              <span> | Peluang Acceptance: {(step.probability * 100).toFixed(2)}%</span>
+            )}
           </p>
-          <p className="small mono">
-            Tabu list aktif:{" "}
-            {step.tabuEdges
-              ?.map(([edge, expiry]) => `${edgeLabel(edge)} ≤ iterasi ${expiry}`)
-              .join("; ") || "kosong"}
+        )}
+        {step.tabu !== undefined && (
+          <p>
+            <strong>Status Tabu:</strong> {step.tabu ? "Langkah Tabu" : "Eligible"}
           </p>
-        </>
+        )}
+      </div>
+
+      {step.move && (
+        <div className="step-move">
+          <strong>Move:</strong> Pertukaran 2-OPT antara posisi simpul (
+          {dataset.nodes[step.move.i]?.id ?? step.move.i}) dan (
+          {dataset.nodes[step.move.j]?.id ?? step.move.j})
+        </div>
       )}
     </div>
   );
@@ -1567,55 +2626,46 @@ function TraceDetailsComponent({ step, dataset }: { step: TraceStep; dataset: Da
 
 function InteractiveMatrixComponent({
   dataset,
-  sourceLabel,
+  sourceLabel: _sourceLabel,
 }: {
   dataset: Dataset;
   sourceLabel: string;
 }) {
+  const [selectedPair, setSelectedPair] = useState<{ row: number; col: number }>({
+    row: 0,
+    col: Math.min(1, dataset.nodes.length - 1),
+  });
   const [hovered, setHovered] = useState<{ row: number; col: number } | null>(null);
+
+  // Reset selected pair jika dataset berubah
+  const prevKeyRef = useRef(datasetKey(dataset));
+  useEffect(() => {
+    const key = datasetKey(dataset);
+    if (prevKeyRef.current !== key) {
+      prevKeyRef.current = key;
+      setHovered(null);
+      setSelectedPair({ row: 0, col: Math.min(1, dataset.nodes.length - 1) });
+    }
+  }, [dataset]);
+
   const matrix = distanceMatrix(dataset.nodes);
 
-  const hoveredNodeA = hovered !== null ? dataset.nodes[hovered.row] : null;
-  const hoveredNodeB = hovered !== null ? dataset.nodes[hovered.col] : null;
-  const hoveredDistance = hovered !== null ? matrix[hovered.row]?.[hovered.col] : null;
+  // Pasangan aktif: prioritas hover bila kursor di atas sel, bila tidak gunakan selectedPair
+  const activePair = hovered ?? selectedPair;
+  const nodeA = dataset.nodes[activePair.row] ?? dataset.nodes[0]!;
+  const nodeB = dataset.nodes[activePair.col] ?? dataset.nodes[0]!;
+  const distance = matrix[activePair.row]?.[activePair.col] ?? 0;
+
+  const nodeOptions = dataset.nodes.map((n, idx) => ({
+    value: String(idx),
+    label: `Node ${n.id} (${n.x}, ${n.y})`,
+  }));
 
   return (
     <div className="interactive-matrix-wrapper">
-      <div className="matrix-source-banner">
-        <span>
-          Sumber: <strong>{sourceLabel}</strong>
-        </span>
-        <span>
-          Aturan: <strong>Euclidean Planar Simetris</strong> ({dataset.unit})
-        </span>
-      </div>
-
-      <div className="matrix-formula-banner">
-        {hovered && hoveredNodeA && hoveredNodeB && typeof hoveredDistance === "number" ? (
-          <div>
-            <span className="text-teal-800 font-semibold">
-              Jarak antara Node {hoveredNodeA.id} ({hoveredNodeA.x}, {hoveredNodeA.y}) dan Node{" "}
-              {hoveredNodeB.id} ({hoveredNodeB.x}, {hoveredNodeB.y}):
-            </span>
-            {hovered.row === hovered.col ? (
-              <span className="ml-2 font-mono text-slate-600">Jarak ke diri sendiri = 0.000</span>
-            ) : (
-              <span className="ml-2 font-mono text-teal-900 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                d = √(({hoveredNodeB.x} - {hoveredNodeA.x})² + ({hoveredNodeB.y} - {hoveredNodeA.y}
-                )²) = {formatNumber(hoveredDistance)} {dataset.unit}
-              </span>
-            )}
-          </div>
-        ) : (
-          <span className="text-slate-500 italic">
-            Arahkan kursor (hover) pada angka sel matriks untuk melihat formula perhitungan jarak
-            antar node.
-          </span>
-        )}
-      </div>
-
-      <div className="table-scroll matrix-scroll">
-        <table className="interactive-matrix-table">
+      {/* 5. Matriks dalam wadah scroll sendiri */}
+      <div className="matrix-scroll">
+        <table className="interactive-matrix-table" aria-label="Tabel Matriks Jarak Antar Node">
           <thead>
             <tr>
               <th scope="col" className="matrix-corner-cell">
@@ -1625,7 +2675,7 @@ function InteractiveMatrixComponent({
                 <th
                   scope="col"
                   key={node.id}
-                  className={`matrix-col-header ${hovered?.col === colIdx ? "col-highlight" : ""}`}
+                  className={`matrix-col-header ${activePair.col === colIdx ? "col-highlighted" : ""}`}
                 >
                   <span className="header-node-id">{node.id}</span>
                   <span className="header-coords">
@@ -1638,13 +2688,13 @@ function InteractiveMatrixComponent({
           <tbody>
             {matrix.map((row, rowIdx) => {
               const rowNode = dataset.nodes[rowIdx]!;
-              const isRowHovered = hovered?.row === rowIdx;
+              const isRowActive = activePair.row === rowIdx;
 
               return (
-                <tr key={rowIdx}>
+                <tr key={rowIdx} className={isRowActive ? "row-highlighted" : ""}>
                   <th
                     scope="row"
-                    className={`matrix-row-header ${isRowHovered ? "row-highlight" : ""}`}
+                    className={`matrix-row-header ${isRowActive ? "row-highlighted" : ""}`}
                   >
                     <span className="header-node-id">{rowNode.id}</span>
                     <span className="header-coords">
@@ -1653,15 +2703,32 @@ function InteractiveMatrixComponent({
                   </th>
                   {row.map((cost, colIdx) => {
                     const isDiagonal = rowIdx === colIdx;
-                    const isCellHovered = hovered?.row === rowIdx && hovered?.col === colIdx;
-                    const isCrosshair = (isRowHovered || hovered?.col === colIdx) && !isDiagonal;
+                    const isSelected = selectedPair.row === rowIdx && selectedPair.col === colIdx;
+                    const isHoveredCell = hovered?.row === rowIdx && hovered?.col === colIdx;
+                    const isCrosshair =
+                      (activePair.row === rowIdx || activePair.col === colIdx) && !isDiagonal;
 
                     return (
                       <td
                         key={colIdx}
                         className={`matrix-cell ${isDiagonal ? "diagonal" : ""} ${
-                          isCellHovered ? "cell-hovered" : isCrosshair ? "crosshair-highlight" : ""
+                          isSelected
+                            ? "cell-selected"
+                            : isHoveredCell
+                              ? "cell-intersect"
+                              : isCrosshair
+                                ? "crosshair-highlight"
+                                : ""
                         }`}
+                        tabIndex={0}
+                        aria-selected={isSelected}
+                        onClick={() => setSelectedPair({ row: rowIdx, col: colIdx })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setSelectedPair({ row: rowIdx, col: colIdx });
+                          }
+                        }}
                         onMouseEnter={() => setHovered({ row: rowIdx, col: colIdx })}
                         onMouseLeave={() => setHovered(null)}
                       >
@@ -1674,6 +2741,57 @@ function InteractiveMatrixComponent({
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* 6. Panel Formula untuk Pasangan Node yang Dipilih */}
+      <div className="matrix-formula-card" aria-live="polite">
+        <div className="matrix-pair-selectors">
+          <span className="font-semibold text-xs text-teal-900 mr-1">Pilih Pasangan Node:</span>
+          <div className="matrix-pair-field">
+            <span className="text-xs text-slate-500">Simpul i:</span>
+            <div className="w-36">
+              <Select
+                value={String(selectedPair.row)}
+                onChange={(val) => setSelectedPair((prev) => ({ ...prev, row: Number(val) }))}
+                options={nodeOptions}
+              />
+            </div>
+          </div>
+          <div className="matrix-pair-field">
+            <span className="text-xs text-slate-500">Simpul j:</span>
+            <div className="w-36">
+              <Select
+                value={String(selectedPair.col)}
+                onChange={(val) => setSelectedPair((prev) => ({ ...prev, col: Number(val) }))}
+                options={nodeOptions}
+              />
+            </div>
+          </div>
+          <span className="text-[11px] text-teal-700 italic ml-auto">
+            (Klik sel pada matriks atau pilih simpul di atas)
+          </span>
+        </div>
+
+        <div className="mt-2">
+          <span className="text-teal-900 font-semibold block mb-1">
+            Jarak antara Node {nodeA.id} ({nodeA.x}, {nodeA.y}) dan Node {nodeB.id} ({nodeB.x},{" "}
+            {nodeB.y}):
+          </span>
+          {activePair.row === activePair.col ? (
+            <div className="font-mono text-xs text-slate-600 bg-white/70 p-2 rounded border border-teal-200 inline-block">
+              d({nodeA.id}, {nodeB.id}) = 0.000 {dataset.unit} (Jarak ke diri sendiri / simpul sama)
+            </div>
+          ) : (
+            <div className="font-mono text-xs text-teal-950 bg-white p-2.5 rounded border border-teal-200">
+              d({nodeA.id}, {nodeB.id}) = √(({nodeB.x} - {nodeA.x})² + ({nodeB.y} - {nodeA.y})²)
+              <span className="block mt-1 text-teal-800 font-bold">
+                = √({Math.pow(nodeB.x - nodeA.x, 2).toFixed(3)} +{" "}
+                {Math.pow(nodeB.y - nodeA.y, 2).toFixed(3)}) = {formatNumber(distance)}{" "}
+                {dataset.unit}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

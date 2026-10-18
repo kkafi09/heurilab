@@ -28,9 +28,11 @@ const csvCell = (value: unknown) =>
   `"${String(value ?? "")
     .replace(/^[=+\-@]/, "'$&")
     .replaceAll('"', '""')}"`;
-export function comparisonCsv(runs: RunResult[]): string {
+export function comparisonCsv(runs: RunResult[], sideMap?: Record<string, "A" | "B">): string {
+  const includeSide = !!sideMap;
   const rows: unknown[][] = [
     [
+      ...(includeSide ? ["side"] : []),
       "run_id",
       "category",
       "dataset",
@@ -61,6 +63,7 @@ export function comparisonCsv(runs: RunResult[]): string {
   ];
   for (const run of runs)
     rows.push([
+      ...(includeSide ? [sideMap[run.id] ?? ""] : []),
       run.id,
       run.category,
       run.dataset.name,
@@ -94,6 +97,10 @@ export function comparisonCsv(runs: RunResult[]): string {
     ]);
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
-export function exportComparison(runs: RunResult[]) {
-  download("\ufeff" + comparisonCsv(runs), "text/csv;charset=utf-8", "heurilab-perbandingan.csv");
+export function exportComparison(
+  runs: RunResult[],
+  filename = "heurilab-perbandingan.csv",
+  sideMap?: Record<string, "A" | "B">,
+) {
+  download("\ufeff" + comparisonCsv(runs, sideMap), "text/csv;charset=utf-8", filename);
 }
