@@ -258,3 +258,150 @@ test("sesi korup dan storage gagal tidak membuat aplikasi crash", async ({ page 
   await expect(page.getByText(/Format sesi tersimpan tidak valid/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Jalankan Metaheuristik" })).toBeEnabled();
 });
+
+test("alur Input manual tabel → validasi error → penambahan node → canvas update → refresh sesi", async ({
+  page,
+}) => {
+  await ready(page);
+
+  // 1. Buka dialog Input manual dari toolbar kanvas
+  await page.getByRole("button", { name: "Input manual" }).click();
+  const dialog = page.getByRole("dialog", { name: /Tambahkan node secara manual/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/Dataset dasar:/)).toBeVisible();
+
+  // 2. Validasi error: isi baris sebagian lalu submit
+  const idInput1 = dialog.getByLabel("ID node baris 1");
+  const xInput1 = dialog.getByLabel("X node baris 1");
+  const yInput1 = dialog.getByLabel("Y node baris 1");
+
+  await idInput1.fill("NODE_PARTIAL");
+  await xInput1.fill("12.5");
+  // Y dikosongkan
+  await dialog.getByRole("button", { name: "Tambahkan ke kanvas" }).click();
+
+  // Dialog tetap terbuka dan error Y ditampilkan
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("alert").getByText("Koordinat Y wajib diisi.")).toBeVisible();
+  await expect(yInput1).toHaveAttribute("aria-invalid", "true");
+
+  // 3. Lengkapi baris 1 dan tambah baris 2
+  await yInput1.fill("-8.5");
+  await dialog.getByRole("button", { name: "Tambah baris" }).click();
+
+  // Baris 2: kosongkan ID untuk ID otomatis, isi X dan Y
+  const xInput2 = dialog.getByLabel("X node baris 2");
+  const yInput2 = dialog.getByLabel("Y node baris 2");
+  await xInput2.fill("-15.25");
+  await yInput2.fill("10");
+
+  // Periksa ringkasan penambahan
+  await expect(dialog.getByText(/Node baru akan ditambahkan: 2 baris/)).toBeVisible();
+  await expect(dialog.getByText(/8 \/ 100 node/)).toBeVisible();
+
+  // 4. Submit penambahan ke kanvas
+  await dialog.getByRole("button", { name: "Tambahkan ke kanvas" }).click();
+  await expect(dialog).not.toBeVisible();
+
+  // 5. Verifikasi kanvas terbarui menjadi 8 node
+  await expect(page.getByText("8 Node ·")).toBeVisible();
+  await expect(page.locator(".interactive-svg").getByText("NODE_PARTIAL")).toBeVisible();
+  // ID otomatis harus 'G' (karena A-F sudah ada)
+  await expect(page.locator(".interactive-svg").getByText("G")).toBeVisible();
+
+  // 6. Jalankan metaheuristik dengan 8 node
+  await page.getByRole("button", { name: "Jalankan Metaheuristik" }).click();
+  await expect(page.getByText(/kandidat eligible|Batas iterasi/)).toBeVisible();
+
+  // 7. Refresh halaman dan pastikan 8 node tetap tersimpan di sesi
+  await page.reload();
+  await expect(page.getByText("8 Node ·")).toBeVisible();
+  await expect(page.locator(".interactive-svg").getByText("NODE_PARTIAL")).toBeVisible();
+  await expect(page.locator(".interactive-svg").getByText("G")).toBeVisible();
+});
+
+test("aksesibilitas modal input manual: focus trap, Escape, dan pengelolaan fokus baris", async ({
+  page,
+}) => {
+  await ready(page);
+
+  const manualBtn = page.getByRole("button", { name: "Input manual" });
+  await manualBtn.click();
+  const dialog = page.getByRole("dialog", { name: /Tambahkan node secara manual/ });
+  await expect(dialog).toBeVisible();
+
+  // Fokus awal masuk ke input field di dalam dialog
+  const firstInput = dialog.getByLabel("ID node baris 1");
+  await expect(firstInput).toBeFocused();
+
+  // Tambah baris: fokus pindah ke input baris baru
+  await dialog.getByRole("button", { name: "Tambah baris" }).click();
+  const secondIdInput = dialog.getByLabel("ID node baris 2");
+  await expect(secondIdInput).toBeFocused();
+
+  // Escape menutup dialog dan mengembalikan fokus ke tombol trigger
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(manualBtn).toBeFocused();
+});
+
+test("penyusunan kanvas kosong menjadi 1 lalu 2 node dan persistensi sesi", async ({ page }) => {
+  await ready(page);
+
+  // Kosongkan kanvas
+  await page.getByRole("button", { name: "Hapus Semua" }).click();
+  await expect(page.getByText("Kanvas masih kosong")).toBeVisible();
+
+  // Buka input manual dari empty overlay
+  await page.locator(".canvas-empty-overlay").getByRole("button", { name: "Input Manual" }).click();
+  const dialog = page.getByRole("dialog", { name: /Tambahkan node secara manual/ });
+  await expect(dialog).toBeVisible();
+
+  // Tambah 1 node (0, 0)
+  await dialog.getByLabel("X node baris 1").fill("0");
+  await dialog.getByLabel("Y node baris 1").fill("0");
+  await dialog.getByRole("button", { name: "Tambahkan ke kanvas" }).click();
+
+  // Kanvas kini 1 node, tombol jalankan nonaktif (karena butuh minimal 3 node)
+  await expect(page.getByText("1 Node ·")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Jalankan Metaheuristik" })).toBeDisabled();
+
+  // Tunggu debounce simpan sesi (500ms) lalu refresh halaman: 1 node tetap tersimpan
+  await page.waitForTimeout(600);
+  await page.reload();
+  await expect(page.getByText("1 Node ·")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Jalankan Metaheuristik" })).toBeDisabled();
+
+  // Tambah node kedua
+  await page.getByRole("button", { name: "Input manual" }).click();
+  const dialog2 = page.getByRole("dialog", { name: /Tambahkan node secara manual/ });
+  await dialog2.getByLabel("X node baris 1").fill("10");
+  await dialog2.getByLabel("Y node baris 1").fill("15");
+  await dialog2.getByRole("button", { name: "Tambahkan ke kanvas" }).click();
+
+  await expect(page.getByText("2 Node ·")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Jalankan Metaheuristik" })).toBeDisabled();
+
+  // Tunggu debounce simpan sesi lalu refresh lagi: 2 node tetap tersimpan
+  await page.waitForTimeout(600);
+  await page.reload();
+  await expect(page.getByText("2 Node ·")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Jalankan Metaheuristik" })).toBeDisabled();
+});
+
+test("responsif modal input manual pada mobile 390x844 tanpa horizontal overflow", async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await ready(page);
+
+  await page.getByRole("button", { name: "Input manual" }).click();
+  const dialog = page.getByRole("dialog", { name: /Tambahkan node secara manual/ });
+  await expect(dialog).toBeVisible();
+
+  const noOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+  );
+  expect(noOverflow).toBe(true);
+  await page.screenshot({ path: info.outputPath("mobile-input-manual.png") });
+});

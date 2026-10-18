@@ -3194,6 +3194,167 @@ footer i {
   font-variant-numeric: tabular-nums;
 }
 
+/* Manual Node Modal Styling */
+.modal-dialog.manual-node-modal-dialog {
+  max-width: 720px;
+  width: 100%;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.manual-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.manual-modal-context-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.manual-modal-error-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.manual-modal-table-container {
+  max-height: 280px;
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.manual-modal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.manual-modal-table th {
+  position: sticky;
+  top: 0;
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+}
+
+.manual-modal-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+}
+
+.manual-input-cell {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1e293b;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.manual-input-cell:focus {
+  border-color: #0d9488;
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.15);
+}
+
+.manual-input-cell.has-error {
+  border-color: #ef4444;
+  background: #fff5f5;
+}
+
+.manual-input-cell.has-error:focus {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+}
+
+.cell-error-msg {
+  display: block;
+  font-size: 11px;
+  color: #dc2626;
+  margin-top: 3px;
+  line-height: 1.25;
+}
+
+.delete-row-btn {
+  padding: 6px;
+  color: #94a3b8;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-row-btn:hover {
+  color: #ef4444;
+  background: #fee2e2;
+}
+
+.manual-modal-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 4px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.manual-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .modal-dialog.manual-node-modal-dialog {
+    margin: 10px;
+    padding: 14px;
+    max-height: 92vh;
+  }
+  .manual-modal-table-container {
+    max-height: 240px;
+  }
+  .manual-modal-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .manual-modal-footer > div {
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

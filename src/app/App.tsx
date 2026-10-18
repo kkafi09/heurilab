@@ -26,6 +26,7 @@ import {
   type Route,
   type ValidationIssue,
 } from "../domain/tsp/model";
+import { getRunIdentity } from "../features/report/formatters";
 import type { WorkerRequest, WorkerResponse } from "../services/protocol";
 
 export function App() {
@@ -332,6 +333,35 @@ export function App() {
                     setSaved(false);
                     dispatch({ type: "add_node", x, y });
                   }}
+                  onAddNodes={(nodes, meta) => {
+                    if (busy || !ready || state.phase !== "idle") return;
+                    const currentVisible = run ? run.dataset : state.dataset;
+                    if (
+                      currentVisible.id !== meta.baseDataset.id ||
+                      currentVisible.nodes.length !== meta.baseDataset.nodes.length
+                    ) {
+                      showToast({
+                        title: "Sumber dataset berubah",
+                        description:
+                          "Dataset dasar telah berubah saat dialog dibuka. Silakan buka ulang dari dataset aktif.",
+                        status: "error",
+                      });
+                      return;
+                    }
+                    setSaved(false);
+                    dispatch({
+                      type: "add_nodes",
+                      nodes,
+                      sourceDataset: meta.baseDataset,
+                      isHistoricalSnapshot: meta.isHistoricalSnapshot,
+                      snapshotStartId: meta.snapshotStartId,
+                    });
+                    showToast({
+                      title: "Node berhasil ditambahkan",
+                      description: `${nodes.length} node ditambahkan ke dataset (total ${meta.baseDataset.nodes.length + nodes.length} node).`,
+                      status: "success",
+                    });
+                  }}
                   onMoveNode={(id, x, y) => {
                     setSaved(false);
                     dispatch({ type: "move_node", id, x, y });
@@ -357,6 +387,9 @@ export function App() {
                     dispatch({ type: "config", config: { ...state.config, startId: id } });
                   }}
                   onUploadDataset={applyDataset}
+                  isHistoricalSnapshot={Boolean(run)}
+                  sourceRunName={run ? getRunIdentity(run, state.runs).fullLabel : undefined}
+                  snapshotStartId={run?.config.startId}
                   busy={busy || !ready}
                   phase={state.phase}
                 />

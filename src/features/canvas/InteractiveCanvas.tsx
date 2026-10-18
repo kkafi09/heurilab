@@ -10,10 +10,12 @@ import {
   X,
   HelpCircle,
   FileSpreadsheet,
+  TableProperties,
 } from "lucide-react";
-import { closedRoute, type Dataset, type Route } from "../../domain/tsp/model";
+import { closedRoute, type Dataset, type Route, type TspNode } from "../../domain/tsp/model";
 import { Button } from "../../components/ui";
 import { ImportPanel } from "../dataset/ImportPanel";
+import { ManualNodeModal } from "./ManualNodeModal";
 
 export function InteractiveCanvas({
   dataset,
@@ -23,6 +25,7 @@ export function InteractiveCanvas({
   candidate,
   startId,
   onAddNode,
+  onAddNodes,
   onMoveNode,
   onRemoveNode,
   onClearNodes,
@@ -30,6 +33,9 @@ export function InteractiveCanvas({
   onLoadExample,
   onSetStartId,
   onUploadDataset,
+  isHistoricalSnapshot,
+  sourceRunName,
+  snapshotStartId,
   busy,
   phase,
 }: {
@@ -40,6 +46,14 @@ export function InteractiveCanvas({
   candidate?: Route;
   startId: string;
   onAddNode: (x: number, y: number) => void;
+  onAddNodes: (
+    nodes: TspNode[],
+    meta: {
+      isHistoricalSnapshot?: boolean;
+      baseDataset: Dataset;
+      snapshotStartId?: string;
+    },
+  ) => void;
   onMoveNode: (id: string, x: number, y: number) => void;
   onRemoveNode: (id: string) => void;
   onClearNodes: () => void;
@@ -47,6 +61,9 @@ export function InteractiveCanvas({
   onLoadExample: () => void;
   onSetStartId: (id: string) => void;
   onUploadDataset: (dataset: Dataset) => void;
+  isHistoricalSnapshot?: boolean;
+  sourceRunName?: string;
+  snapshotStartId?: string;
   busy: boolean;
   phase: string;
 }) {
@@ -57,6 +74,7 @@ export function InteractiveCanvas({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showManualModal, setShowManualModal] = useState(false);
 
   const nodes = dataset.nodes;
 
@@ -231,6 +249,18 @@ export function InteractiveCanvas({
         <div className="toolbar-group">
           <button
             type="button"
+            className="action-btn"
+            disabled={busy}
+            onClick={() => setShowManualModal(true)}
+            title="Tambahkan node secara manual melalui tabel koordinat"
+            aria-label="Input manual"
+          >
+            <TableProperties size={14} />
+            <span>Input manual</span>
+          </button>
+
+          <button
+            type="button"
             className="action-btn upload-btn"
             disabled={busy}
             onClick={() => setShowUploadModal(true)}
@@ -403,12 +433,15 @@ export function InteractiveCanvas({
             <p className="text-sm text-slate-500">
               Klik di mana saja untuk menaruh node baru, atau gunakan tombol di toolbar.
             </p>
-            <div className="flex gap-2 mt-3">
+            <div className="flex flex-wrap gap-2 mt-3">
               <Button size="sm" onClick={() => onRandomNodes(10)}>
                 <Shuffle size={14} /> Buat 10 Node Acak
               </Button>
               <Button size="sm" variant="outline" onClick={onLoadExample}>
                 <RotateCcw size={14} /> Muat Contoh 6 Node
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setShowManualModal(true)}>
+                <TableProperties size={14} /> Input Manual
               </Button>
             </div>
           </div>
@@ -534,6 +567,20 @@ export function InteractiveCanvas({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Manual Input Modal */}
+      {showManualModal && (
+        <ManualNodeModal
+          isOpen={showManualModal}
+          onClose={() => setShowManualModal(false)}
+          baseDataset={dataset}
+          isHistoricalSnapshot={isHistoricalSnapshot}
+          sourceRunName={sourceRunName}
+          snapshotStartId={snapshotStartId}
+          onSubmitNodes={onAddNodes}
+          busy={busy}
+        />
       )}
     </div>
   );

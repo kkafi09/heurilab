@@ -142,7 +142,7 @@ export function validateConfig(config: RunConfig, dataset: Dataset): string[] {
   if (!["none", "2OPT", "3OPT"].includes(improveChoice)) {
     errors.push("Pilihan perbaikan tidak valid.");
   }
-  if (!dataset.nodes.some((node) => node.id === config.startId)) {
+  if (dataset.nodes.length > 0 && !dataset.nodes.some((node) => node.id === config.startId)) {
     errors.push("Titik awal tidak ada di dataset.");
   }
 

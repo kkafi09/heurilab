@@ -50,6 +50,31 @@ export function validateDataset(dataset: Dataset): ValidationIssue[] {
   }
   return issues;
 }
+export function validateWorkingDataset(dataset: Dataset): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (dataset.nodes.length > 100)
+    issues.push({ message: "Dataset tidak boleh melebihi 100 node." });
+  const ids = new Set<string>();
+  dataset.nodes.forEach((node, row) => {
+    if (!node.id.trim()) issues.push({ row, field: "id", message: "ID wajib diisi." });
+    else if (ids.has(node.id.trim()))
+      issues.push({ row, field: "id", message: `ID ${node.id} digunakan lebih dari sekali.` });
+    ids.add(node.id.trim());
+    for (const field of ["x", "y"] as const)
+      if (!Number.isFinite(node[field]))
+        issues.push({ row, field, message: `Koordinat ${field} harus berupa angka finite.` });
+  });
+  if (!issues.length && dataset.nodes.length >= 2) {
+    const matrix = distanceMatrix(dataset.nodes);
+    const maxEdge = Math.max(...matrix.flat());
+    if (!Number.isFinite(maxEdge * dataset.nodes.length))
+      issues.push({
+        message: "Koordinat terlalu besar: jarak atau total rute melampaui batas angka.",
+      });
+  }
+  return issues;
+}
+
 export function validateRoute(route: Route, size: number): boolean {
   return (
     route.length === size &&

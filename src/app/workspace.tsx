@@ -3,6 +3,7 @@ import { EXAMPLE, type Dataset, type TspNode } from "../domain/tsp/model";
 import { defaultConfig, type RunConfig, type RunResult } from "../domain/algorithms/experiment";
 import type { SavedSession } from "../services/storage";
 import type { WorkerResponse } from "../services/protocol";
+import { getNextAvailableNodeId } from "../domain/tsp/manualInput";
 export interface Workspace {
   dataset: Dataset;
   config: RunConfig;
@@ -17,6 +18,13 @@ export type Action =
   | { type: "restore"; session: SavedSession }
   | { type: "dataset"; dataset: Dataset }
   | { type: "add_node"; x: number; y: number }
+  | {
+      type: "add_nodes";
+      nodes: TspNode[];
+      sourceDataset?: Dataset;
+      isHistoricalSnapshot?: boolean;
+      snapshotStartId?: string;
+    }
   | { type: "move_node"; id: string; x: number; y: number }
   | { type: "remove_node"; id: string }
   | { type: "clear_nodes" }
@@ -33,15 +41,7 @@ export type Action =
 
 function getNextNodeId(existingNodes: TspNode[]): string {
   const existing = new Set(existingNodes.map((n) => n.id.trim().toUpperCase()));
-  for (let i = 0; i < 26; i++) {
-    const char = String.fromCharCode(65 + i);
-    if (!existing.has(char)) return char;
-  }
-  let num = 1;
-  while (existing.has(`N${num}`)) {
-    num++;
-  }
-  return `N${num}`;
+  return getNextAvailableNodeId(existing);
 }
 
 const initial: Workspace = {
@@ -84,6 +84,51 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       const startId = newNodes.some((node) => node.id === state.config.startId)
         ? state.config.startId
         : newNodes[0]!.id;
+      return {
+        ...state,
+        dataset: newDataset,
+        config: { ...state.config, startId },
+        active: null,
+        selectedId: null,
+        error: null,
+      };
+    }
+
+    case "add_nodes": {
+      if (action.nodes.length === 0) return state;
+      const baseDataset =
+        action.isHistoricalSnapshot && action.sourceDataset ? action.sourceDataset : state.dataset;
+
+      const newNodes = [...baseDataset.nodes, ...action.nodes];
+      let newDataset: Dataset;
+
+      if (action.isHistoricalSnapshot && action.sourceDataset) {
+        newDataset = {
+          id: crypto.randomUUID(),
+          name: `${action.sourceDataset.name} (Cabang)`,
+          nodes: newNodes,
+          unit: action.sourceDataset.unit,
+          provenance: `Bercabang dari ${action.sourceDataset.name} dengan penambahan ${action.nodes.length} koordinat manual.`,
+        };
+      } else {
+        newDataset = {
+          ...state.dataset,
+          nodes: newNodes,
+          provenance: state.dataset.provenance || "Koordinat planar dengan penambahan manual.",
+        };
+      }
+
+      let startId = state.config.startId;
+      if (
+        action.isHistoricalSnapshot &&
+        action.snapshotStartId &&
+        newNodes.some((n) => n.id === action.snapshotStartId)
+      ) {
+        startId = action.snapshotStartId;
+      } else if (!newNodes.some((node) => node.id === startId)) {
+        startId = newNodes[0]?.id ?? "";
+      }
+
       return {
         ...state,
         dataset: newDataset,

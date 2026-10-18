@@ -1,4 +1,9 @@
-import { validateDataset, validateRoute, type Dataset } from "../domain/tsp/model";
+import {
+  validateDataset,
+  validateRoute,
+  validateWorkingDataset,
+  type Dataset,
+} from "../domain/tsp/model";
 import {
   validateConfig,
   type RunConfig,
@@ -15,7 +20,7 @@ export interface SavedSession {
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-function validDataset(value: unknown): value is Dataset {
+function validWorkingDataset(value: unknown): value is Dataset {
   if (
     !record(value) ||
     typeof value.id !== "string" ||
@@ -35,13 +40,19 @@ function validDataset(value: unknown): value is Dataset {
     )
   )
     return false;
-  return validateDataset(value as unknown as Dataset).length === 0;
+  return validateWorkingDataset(value as unknown as Dataset).length === 0;
 }
+
+function validOptimizationDataset(value: unknown): value is Dataset {
+  if (!validWorkingDataset(value)) return false;
+  return validateDataset(value).length === 0;
+}
+
 export function parseSession(value: unknown): SavedSession {
   if (
     !record(value) ||
     (value.version !== 1 && value.version !== 2) ||
-    !validDataset(value.dataset) ||
+    !validWorkingDataset(value.dataset) ||
     !record(value.config) ||
     !Array.isArray(value.runs) ||
     value.runs.length > 10
@@ -51,6 +62,15 @@ export function parseSession(value: unknown): SavedSession {
     );
 
   const rawConfig = value.config as Record<string, unknown>;
+  const defaultStartId = value.dataset.nodes[0]?.id ?? "";
+  let resolvedStartId = String(rawConfig.startId ?? defaultStartId);
+  if (
+    value.dataset.nodes.length > 0 &&
+    !value.dataset.nodes.some((n) => n.id === resolvedStartId)
+  ) {
+    resolvedStartId = defaultStartId;
+  }
+
   const migratedConfig: RunConfig = {
     ...rawConfig,
     category: (rawConfig.category as RunConfig["category"]) ?? "metaheuristic",
@@ -62,7 +82,7 @@ export function parseSession(value: unknown): SavedSession {
           ? "2OPT"
           : "none"
         : ((rawConfig.improve as RunConfig["improve"]) ?? "none"),
-    startId: String(rawConfig.startId ?? "A"),
+    startId: resolvedStartId,
     maxIterations: Number(rawConfig.maxIterations ?? 2000),
     seed: Number(rawConfig.seed ?? 42),
     tenure: Number(rawConfig.tenure ?? 7),
@@ -80,7 +100,7 @@ export function parseSession(value: unknown): SavedSession {
   for (const item of value.runs as unknown[]) {
     if (
       !record(item) ||
-      !validDataset(item.dataset) ||
+      !validOptimizationDataset(item.dataset) ||
       !record(item.config) ||
       typeof item.id !== "string" ||
       typeof item.createdAt !== "string" ||

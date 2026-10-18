@@ -243,6 +243,21 @@ export function HelpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
 
               <div className="help-feature-card">
                 <div className="help-feature-title">
+                  <TableProperties size={16} className="text-teal-700" />
+                  <span>Input Manual Melalui Tabel</span>
+                </div>
+                <p>
+                  Gunakan tombol <em>Input manual</em> pada toolbar kanvas untuk memasukkan beberapa
+                  koordinat sekaligus melalui tabel ID/X/Y. ID bersifat opsional (dibuat otomatis
+                  A–Z lalu N1, dst. bila dikosongkan), koordinat X dan Y wajib diisi (gunakan titik
+                  untuk desimal, misalnya -2.5). Node baru ditambahkan (append) ke dataset aktif.
+                  Sesi dapat menyimpan draf kerja 1 atau 2 node, namun eksperimen optimasi
+                  memerlukan minimal 3 node.
+                </p>
+              </div>
+
+              <div className="help-feature-card">
+                <div className="help-feature-title">
                   <Upload size={16} className="text-teal-700" />
                   <span>Impor File Dataset Excel (.xlsx)</span>
                 </div>
