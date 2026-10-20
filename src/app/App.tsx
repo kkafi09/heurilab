@@ -15,17 +15,19 @@ import { Button } from "../components/ui";
 import { loadSession, saveSession } from "../services/storage";
 import {
   defaultConfig,
-  makeInitialRoute,
   validateConfig,
   type RunConfig,
   type RunResult,
 } from "../domain/algorithms/experiment";
 import {
+  distanceMatrix,
+  routeCost,
   validateDataset,
   type Dataset,
   type Route,
   type ValidationIssue,
 } from "../domain/tsp/model";
+import { tourNodeIdsToRoute } from "../domain/tsp/randomGenerator";
 import { getRunIdentity } from "../features/report/formatters";
 import type { WorkerRequest, WorkerResponse } from "../services/protocol";
 
@@ -46,37 +48,51 @@ export function App() {
   const busy = state.phase !== "idle";
   const run = state.active ?? state.runs.find((item) => item.id === state.selectedId) ?? null;
 
-  const { initialMethod, improve, startId } = state.config;
+  const { startId } = state.config;
 
-  // Calculate baseline initial route for current dataset
-  // Avoid heavy 3-OPT calculation on the synchronous render path
-  const initial = useMemo(() => {
-    if (state.dataset.nodes.length < 3) {
-      return state.dataset.nodes.map((_, i) => i);
+  // Preview route for current dataset without heuristic or local search optimization
+  const previewRoute = useMemo(() => {
+    const nodes = state.dataset.nodes;
+    if (nodes.length < 3) {
+      return nodes.map((_, i) => i);
     }
+    if (
+      state.dataset.randomTourNodeIds &&
+      state.dataset.randomTourNodeIds.length === nodes.length
+    ) {
+      const mapped = tourNodeIdsToRoute(nodes, state.dataset.randomTourNodeIds, startId);
+      if (mapped) return mapped;
+    }
+    const startIdx = nodes.findIndex((n) => n.id === startId);
+    const validStart = startIdx >= 0 ? startIdx : 0;
+    return Array.from({ length: nodes.length }, (_, i) => (validStart + i) % nodes.length);
+  }, [state.dataset, startId]);
+
+  const previewCost = useMemo(() => {
+    if (state.dataset.nodes.length < 3) return 0;
     try {
-      const previewImprove = improve === "3OPT" ? "none" : improve;
-      return makeInitialRoute(state.dataset, { initialMethod, improve: previewImprove, startId });
+      const matrix = distanceMatrix(state.dataset.nodes);
+      return routeCost(previewRoute, matrix);
     } catch {
-      return state.dataset.nodes.map((_, i) => i);
+      return 0;
     }
-  }, [state.dataset, initialMethod, improve, startId]);
+  }, [state.dataset.nodes, previewRoute]);
 
   // Active routes for canvas rendering
   const routes = useMemo(() => {
     if (run) {
       return {
-        current: run.currentRoute ?? initial,
-        best: run.bestRoute ?? initial,
+        current: run.currentRoute ?? previewRoute,
+        best: run.bestRoute ?? previewRoute,
         candidate: undefined,
       };
     }
     return {
-      current: initial,
-      best: initial,
+      current: previewRoute,
+      best: previewRoute,
       candidate: undefined,
     };
-  }, [run, initial]);
+  }, [run, previewRoute]);
 
   // Load session from IndexedDB on startup
   useEffect(() => {
@@ -144,6 +160,17 @@ export function App() {
         throw new Error([...issues.map((i: ValidationIssue) => i.message), ...cfgErrors].join(" "));
       }
 
+      let resolvedInitialRoute: Route | undefined = initialRoute;
+      if (
+        !resolvedInitialRoute &&
+        config.initialMethod === "random" &&
+        dataset.randomTourNodeIds &&
+        dataset.randomTourNodeIds.length === dataset.nodes.length
+      ) {
+        const mapped = tourNodeIdsToRoute(dataset.nodes, dataset.randomTourNodeIds, config.startId);
+        if (mapped) resolvedInitialRoute = mapped;
+      }
+
       worker.current?.terminate();
       const current = new Worker(new URL("../workers/optimizer.ts", import.meta.url), {
         type: "module",
@@ -194,7 +221,13 @@ export function App() {
       const message: WorkerRequest = {
         type: "start",
         id,
-        input: { id, createdAt: new Date().toISOString(), dataset, config, initialRoute },
+        input: {
+          id,
+          createdAt: new Date().toISOString(),
+          dataset,
+          config,
+          initialRoute: resolvedInitialRoute,
+        },
       };
       // oxlint-disable-next-line unicorn/require-post-message-target-origin
       current.postMessage(message);
@@ -240,9 +273,9 @@ export function App() {
       };
       dispatch({ type: "dataset", dataset: previous.dataset });
       dispatch({ type: "config", config });
-      start(previous.dataset, config);
+      start(previous.dataset, config, previous.initialRoute);
     } else {
-      start(previous.dataset, previous.config);
+      start(previous.dataset, previous.config, previous.initialRoute);
     }
   }
 
@@ -324,7 +357,7 @@ export function App() {
               <div className="canvas-column">
                 <InteractiveCanvas
                   dataset={run?.dataset ?? state.dataset}
-                  initial={run?.initialRoute ?? initial}
+                  initial={run?.initialRoute ?? previewRoute}
                   current={routes.current}
                   best={routes.best}
                   candidate={routes.candidate}
@@ -378,6 +411,15 @@ export function App() {
                     setSaved(false);
                     dispatch({ type: "random_nodes", count });
                   }}
+                  onGenerateDataset={(config) => {
+                    setSaved(false);
+                    dispatch({ type: "generate_dataset", config });
+                    showToast({
+                      title: "Dataset acak dibangkitkan",
+                      description: `${config.nodeCount} node dibuat dengan rute acak awal yang belum dioptimasi.`,
+                      status: "success",
+                    });
+                  }}
                   onLoadExample={() => {
                     setSaved(false);
                     dispatch({ type: "load_example" });
@@ -404,6 +446,7 @@ export function App() {
                   ready={ready}
                   run={run}
                   runs={state.runs}
+                  previewCost={previewCost}
                   onConfigChange={(config) => {
                     setSaved(false);
                     dispatch({ type: "config", config });

@@ -75,7 +75,17 @@ export function parseSession(value: unknown): SavedSession {
     ...rawConfig,
     category: (rawConfig.category as RunConfig["category"]) ?? "metaheuristic",
     algorithm: (rawConfig.algorithm as RunConfig["algorithm"]) ?? "TS",
-    initialMethod: (rawConfig.initialMethod as RunConfig["initialMethod"]) ?? "NN",
+    initialMethod: (() => {
+      const im = (rawConfig.initialMethod as RunConfig["initialMethod"]) ?? "NN";
+      if (
+        im === "random" &&
+        (!value.dataset.randomTourNodeIds ||
+          value.dataset.randomTourNodeIds.length !== value.dataset.nodes.length)
+      ) {
+        return "NN";
+      }
+      return im;
+    })(),
     improve:
       typeof rawConfig.improve === "boolean"
         ? rawConfig.improve
@@ -118,16 +128,38 @@ export function parseSession(value: unknown): SavedSession {
     )
       throw new Error("Riwayat tersimpan tidak valid.");
 
+    const runDataset = item.dataset;
+    if (!validOptimizationDataset(runDataset)) {
+      throw new Error("Riwayat tersimpan tidak valid.");
+    }
+
     const rawRunConfig = item.config as Record<string, unknown>;
     const runCategory =
       (item.category as RunResult["category"]) ??
       (rawRunConfig.category as RunResult["category"]) ??
       "metaheuristic";
+    let runInitialMethod = (rawRunConfig.initialMethod as RunConfig["initialMethod"]) ?? "NN";
+    if (
+      runInitialMethod === "random" &&
+      (!runDataset.randomTourNodeIds ||
+        runDataset.randomTourNodeIds.length !== runDataset.nodes.length)
+    ) {
+      if (
+        Array.isArray(item.initialRoute) &&
+        item.initialRoute.length === runDataset.nodes.length
+      ) {
+        runDataset.randomTourNodeIds = (item.initialRoute as number[])
+          .map((idx) => runDataset.nodes[idx]?.id)
+          .filter(Boolean) as string[];
+      } else {
+        runInitialMethod = "NN";
+      }
+    }
     const runConfig: RunConfig = {
       ...rawRunConfig,
       category: runCategory,
       algorithm: (rawRunConfig.algorithm as RunConfig["algorithm"]) ?? "TS",
-      initialMethod: (rawRunConfig.initialMethod as RunConfig["initialMethod"]) ?? "NN",
+      initialMethod: runInitialMethod,
       improve:
         typeof rawRunConfig.improve === "boolean"
           ? rawRunConfig.improve

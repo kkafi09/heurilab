@@ -16,6 +16,8 @@ import { closedRoute, type Dataset, type Route, type TspNode } from "../../domai
 import { Button } from "../../components/ui";
 import { ImportPanel } from "../dataset/ImportPanel";
 import { ManualNodeModal } from "./ManualNodeModal";
+import { RandomGeneratorModal } from "../dataset/RandomGeneratorModal";
+import type { GeneratorConfig } from "../../domain/tsp/randomGenerator";
 
 export function InteractiveCanvas({
   dataset,
@@ -30,6 +32,7 @@ export function InteractiveCanvas({
   onRemoveNode,
   onClearNodes,
   onRandomNodes,
+  onGenerateDataset,
   onLoadExample,
   onSetStartId,
   onUploadDataset,
@@ -58,6 +61,7 @@ export function InteractiveCanvas({
   onRemoveNode: (id: string) => void;
   onClearNodes: () => void;
   onRandomNodes: (count: number) => void;
+  onGenerateDataset?: (config: GeneratorConfig) => void;
   onLoadExample: () => void;
   onSetStartId: (id: string) => void;
   onUploadDataset: (dataset: Dataset) => void;
@@ -75,6 +79,8 @@ export function InteractiveCanvas({
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
+  const [showGeneratorModal, setShowGeneratorModal] = useState(false);
+  const [generatorPrefillCount, setGeneratorPrefillCount] = useState<number | undefined>(undefined);
 
   const nodes = dataset.nodes;
 
@@ -218,20 +224,43 @@ export function InteractiveCanvas({
             type="button"
             className="action-btn"
             disabled={busy}
-            onClick={() => onRandomNodes(10)}
-            title="Buat 10 titik acak"
+            onClick={() => {
+              setGeneratorPrefillCount(undefined);
+              setShowGeneratorModal(true);
+            }}
+            title="Generator Dataset Acak (3-100 Node, Merata / Cluster)"
           >
             <Shuffle size={14} />
+            <span>Generator</span>
+          </button>
+          <button
+            type="button"
+            className="action-btn"
+            disabled={busy}
+            onClick={() => {
+              if (onGenerateDataset) {
+                onGenerateDataset({ nodeCount: 10, distribution: "uniform" });
+              } else {
+                onRandomNodes(10);
+              }
+            }}
+            title="Bangkitkan 10 titik acak"
+          >
             <span>Acak 10</span>
           </button>
           <button
             type="button"
             className="action-btn"
             disabled={busy}
-            onClick={() => onRandomNodes(20)}
-            title="Buat 20 titik acak"
+            onClick={() => {
+              if (onGenerateDataset) {
+                onGenerateDataset({ nodeCount: 20, distribution: "uniform" });
+              } else {
+                onRandomNodes(20);
+              }
+            }}
+            title="Bangkitkan 20 titik acak"
           >
-            <Shuffle size={14} />
             <span>Acak 20</span>
           </button>
           <button
@@ -355,8 +384,8 @@ export function InteractiveCanvas({
             />
           )}
 
-          {/* Layer 4: Best Route (Emerald Solid) */}
-          {best.length > 2 && (
+          {/* Layer 4: Best Route (Emerald Solid) - hanya aktif jika ada run terselesaikan / historis */}
+          {isHistoricalSnapshot && best.length > 2 && (
             <path
               d={getPathD(best)}
               fill="none"
@@ -434,8 +463,14 @@ export function InteractiveCanvas({
               Klik di mana saja untuk menaruh node baru, atau gunakan tombol di toolbar.
             </p>
             <div className="flex flex-wrap gap-2 mt-3">
-              <Button size="sm" onClick={() => onRandomNodes(10)}>
-                <Shuffle size={14} /> Buat 10 Node Acak
+              <Button
+                size="sm"
+                onClick={() => {
+                  setGeneratorPrefillCount(10);
+                  setShowGeneratorModal(true);
+                }}
+              >
+                <Shuffle size={14} /> Generator Acak (3–100)
               </Button>
               <Button size="sm" variant="outline" onClick={onLoadExample}>
                 <RotateCcw size={14} /> Muat Contoh 6 Node
@@ -503,12 +538,25 @@ export function InteractiveCanvas({
             <span>
               {nodes.length} Node · {dataset.unit}
             </span>
+            {dataset.randomTourNodeIds && !isHistoricalSnapshot && phase === "idle" && (
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 ml-2">
+                Rute acak awal — belum diperbaiki
+              </span>
+            )}
+            {!dataset.randomTourNodeIds &&
+              !isHistoricalSnapshot &&
+              phase === "idle" &&
+              nodes.length >= 3 && (
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 ml-2">
+                  Urutan data — belum diperbaiki
+                </span>
+              )}
           </div>
 
           <div className="canvas-legend">
             <span className="legend-item">
               <i className="legend-color initial" />
-              <span>Awal</span>
+              <span>{isHistoricalSnapshot ? "Awal" : "Rute Awal"}</span>
             </span>
             {phase !== "idle" && (
               <span className="legend-item">
@@ -516,10 +564,12 @@ export function InteractiveCanvas({
                 <span>Current</span>
               </span>
             )}
-            <span className="legend-item">
-              <i className="legend-color best" />
-              <span>Terbaik (Best)</span>
-            </span>
+            {isHistoricalSnapshot && (
+              <span className="legend-item">
+                <i className="legend-color best" />
+                <span>Terbaik (Best)</span>
+              </span>
+            )}
             <span className="legend-item">
               <i className="legend-start-dot" />
               <span>Start: {startId || "—"}</span>
@@ -582,6 +632,20 @@ export function InteractiveCanvas({
           busy={busy}
         />
       )}
+      {/* Modal Generator Dataset Acak */}
+      <RandomGeneratorModal
+        isOpen={showGeneratorModal}
+        onClose={() => setShowGeneratorModal(false)}
+        initialCount={generatorPrefillCount}
+        busy={busy}
+        onGenerate={(cfg) => {
+          if (onGenerateDataset) {
+            onGenerateDataset(cfg);
+          } else {
+            onRandomNodes(cfg.nodeCount);
+          }
+        }}
+      />
     </div>
   );
 }

@@ -5,12 +5,24 @@ export interface TspNode {
   x: number;
   y: number;
 }
+export interface GeneratorMetadata {
+  version: number;
+  distribution: "uniform" | "cluster";
+  nodeCount: number;
+  seed: number;
+  clusterCount?: number;
+  bounds: { minX: number; maxX: number; minY: number; maxY: number };
+  isEdited?: boolean;
+}
+
 export interface Dataset {
   id: string;
   name: string;
   nodes: TspNode[];
   unit: string;
   provenance: string;
+  generator?: GeneratorMetadata;
+  randomTourNodeIds?: string[];
 }
 export type Route = number[];
 export type DistanceMatrix = number[][];

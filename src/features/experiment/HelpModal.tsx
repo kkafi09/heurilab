@@ -16,6 +16,7 @@ import {
   TrendingDown,
   Download,
   CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "../../components/ui";
 
@@ -258,6 +259,23 @@ export function HelpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
 
               <div className="help-feature-card">
                 <div className="help-feature-title">
+                  <Sparkles size={16} className="text-teal-700" />
+                  <span>Generator Dataset Acak (3–100 Node)</span>
+                </div>
+                <p>
+                  Gunakan tombol <em>Generator</em> pada toolbar kanvas (atau tombol pintas{" "}
+                  <em>Acak 10</em> / <em>Acak 20</em>) untuk membangkitkan titik koordinat baru
+                  secara otomatis. Mendukung distribusi <strong>Uniform (Merata)</strong> di rentang
+                  [-100, 100] maupun <strong>Cluster (Kelompok)</strong> dengan sebaran Gaussian
+                  mengelilingi pusat cluster di [-60, 60] (standar deviasi σ = 12). Anda dapat
+                  menentukan <em>Seed Data</em> khusus (0–4.294.967.295) untuk replikasi eksperimen
+                  yang presisi. Rute awal diacak murni menggunakan algoritma Fisher-Yates tanpa
+                  optimasi tersembunyi.
+                </p>
+              </div>
+
+              <div className="help-feature-card">
+                <div className="help-feature-title">
                   <Upload size={16} className="text-teal-700" />
                   <span>Impor File Dataset Excel (.xlsx)</span>
                 </div>
@@ -328,8 +346,9 @@ export function HelpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
                     telah mencapai nilai minimum.
                   </li>
                   <li>
-                    <strong>Seed:</strong> Mengontrol generator bilangan acak sehingga keputusan
-                    pencarian dapat direproduksi secara deterministik.
+                    <strong>Seed SA:</strong> Mengontrol generator bilangan acak (Mulberry32) khusus
+                    untuk probabilitas penerimaan langkah buruk. Berdiri sendiri dan terpisah dari
+                    Seed Data yang menentukan sebaran koordinat dan rute acak awal.
                   </li>
                 </ul>
               </div>
@@ -340,6 +359,12 @@ export function HelpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
                   <span>Solusi Awal & Local Search</span>
                 </div>
                 <ul className="list-disc list-inside text-xs space-y-1 text-slate-700">
+                  <li>
+                    <strong>Rute Acak (Random Tour):</strong> Permutasi acak urutan node
+                    (Fisher-Yates) yang dimulai dan ditutup pada titik keberangkatan awal. Rute ini
+                    murni tanpa bias heuristik jarak maupun pra-optimasi tersembunyi, sangat berguna
+                    untuk menguji daya jelajah TS dan SA.
+                  </li>
                   <li>
                     <strong>Nearest Neighbor (NN):</strong> Memilih node terdekat yang belum
                     dikunjungi dari posisi terakhir.

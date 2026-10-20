@@ -68,13 +68,13 @@ di browser pengguna.
 
 ## Cara menggunakan
 
-1. Gunakan contoh sintetis enam node atau edit tabel ID/X/Y. Klik **Terapkan** setelah selesai.
+1. Gunakan contoh sintetis enam node, generate dataset acak via **Generator** (Uniform / Cluster hingga 100 node dengan seed data), atau edit tabel ID/X/Y. Klik **Terapkan** setelah selesai.
 2. Untuk Excel, klik **Impor Excel**, pilih .xlsx, pilih sheet dan kolom, periksa preview,
    lalu **Terapkan impor**. **Unduh template** menghasilkan workbook dengan contoh enam node.
 3. Pilih **Jenis Eksperimen**:
    - **Konstruksi:** Bangun tour awal dengan **Nearest Neighbor (NN)**, **Nearest Insertion (NI)**, atau **Nearest Farthest Insertion (NFI)** dari titik awal pilihan.
-   - **Local Search:** Bentuk tour dasar lalu lakukan perbaikan turunan deterministik dengan **2-OPT** atau **3-OPT**.
-   - **Metaheuristik:** Pilih **Tabu Search (TS)** atau **Simulated Annealing (SA)**, tentukan pembentuk tour awal, perbaikan awal (Tidak ada / 2-OPT / 3-OPT), serta parameter pencarian.
+   - **Local Search:** Gunakan rute dasar acak atau konstruktif, lalu lakukan perbaikan turunan deterministik dengan **2-OPT** atau **3-OPT**.
+   - **Metaheuristik:** Pilih **Tabu Search (TS)** atau **Simulated Annealing (SA)**, tentukan pembentuk tour awal (**Rute acak**, **NN**, **NI**, atau **NFI**), perbaikan awal (Tidak ada / 2-OPT / 3-OPT), serta parameter pencarian.
 4. Tentukan parameter, kemudian **Jalankan eksperimen**.
 5. Gunakan **Jeda**, **Lanjutkan**, atau **Batalkan**. Best-so-far tetap tersedia setelah cancel.
 6. Pada TS/SA, telusuri **Trace iterasi** untuk melihat candidate/current/best dan alasan keputusan.
@@ -89,6 +89,9 @@ UI menyediakan **Panduan**; aturan algoritma dan parameter dijelaskan lengkap da
 ## Data dan parameter
 
 - 3–100 node; ID wajib unik; koordinat harus angka finite. Koordinat berimpit diperbolehkan.
+- Generator acak mendukung 3–100 node dengan sebaran **Uniform (Merata)** di [-100, 100] atau **Cluster (Kelompok)** Gaussian (1–10 pusat cluster di [-60, 60] dengan $\sigma = 12$).
+- Rute acak awal dibentuk murni melalui permutasi Fisher-Yates tanpa pra-optimasi tersembunyi hingga pengguna menjalankan algoritma.
+- **Seed Data** (0–4.294.967.295) mengontrol penempatan koordinat dan rute acak awal. **Seed SA** berdiri sendiri dan terpisah untuk probabilitas penerimaan annealing.
 - Jarak Euclidean planar, satuan **unit koordinat**. Kalkulasi presisi penuh; pembulatan hanya di UI.
 - Excel .xlsx maksimum 10 MB; header default `id`, `x`, `y`, atau kolom dipetakan manual.
 - Angka desimal memakai titik ketika dimasukkan. Baris kosong Excel dilewati; error memuat nomor baris sumber.

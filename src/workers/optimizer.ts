@@ -159,6 +159,12 @@ function startMetaheuristicSearch() {
         totalMs: constructionMs + preparationMs,
       },
     });
+    if (preparationMs > 0 || activeInput.config.improve !== "none") {
+      engine.result.initialRoute = [...lsInitialRoute];
+      engine.result.initialCost = lsInitialCost;
+      engine.result.preparedInitialRoute = [...lsBestRoute];
+      engine.result.preparedInitialCost = lsBestCost;
+    }
     timer = setTimeout(tick, 0);
   } catch (err) {
     send({
@@ -346,6 +352,10 @@ function tick() {
           trace: [],
           iterations: lsSteps,
           evaluations: lsEvaluations,
+          initialRouteSource:
+            activeInput.initialRoute || activeInput.config.initialMethod === "random"
+              ? "snapshot"
+              : "computed",
           durationMs: searchMs,
           durations: {
             constructionMs,
@@ -369,7 +379,10 @@ function tick() {
       if (engine.done) {
         const searchMs = elapsed();
         engine.result.durationMs = searchMs;
-        engine.result.initialRouteSource = activeInput?.initialRoute ? "snapshot" : "computed";
+        engine.result.initialRouteSource =
+          activeInput?.initialRoute || activeInput?.config.initialMethod === "random"
+            ? "snapshot"
+            : "computed";
         engine.result.durations = {
           constructionMs,
           preparationMs,
@@ -459,11 +472,13 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
       // 2. Local Search Experiment
       if (category === "local-search") {
         const t0 = performance.now();
-        const baseRoute = makeInitialRoute(dataset, {
-          initialMethod: config.initialMethod,
-          improve: "none",
-          startId: config.startId,
-        });
+        const baseRoute = initialRoute
+          ? [...initialRoute]
+          : makeInitialRoute(dataset, {
+              initialMethod: config.initialMethod,
+              improve: "none",
+              startId: config.startId,
+            });
         constructionMs = performance.now() - t0;
         lsInitialRoute = [...baseRoute];
         lsInitialCost = routeCost(baseRoute, lsMatrix);
@@ -524,8 +539,7 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
       lsEvaluations = 0;
       lsDone = false;
 
-      const needsPreparation =
-        !initialRoute && (config.improve === "2OPT" || config.improve === "3OPT");
+      const needsPreparation = config.improve === "2OPT" || config.improve === "3OPT";
 
       if (needsPreparation) {
         phase = "preparing";
@@ -619,8 +633,13 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
         evaluations: 0,
         preparationSteps: lsSteps,
         preparationEvaluations: lsEvaluations,
+        preparedInitialRoute: [...lsBestRoute],
+        preparedInitialCost: lsBestCost,
         cancelledStage: "preparation",
-        initialRouteSource: activeInput?.initialRoute ? "snapshot" : "computed",
+        initialRouteSource:
+          activeInput?.initialRoute || activeInput?.config.initialMethod === "random"
+            ? "snapshot"
+            : "computed",
         durationMs: dur,
         durations: {
           constructionMs,
@@ -654,6 +673,10 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
         trace: [],
         iterations: lsSteps,
         evaluations: lsEvaluations,
+        initialRouteSource:
+          activeInput?.initialRoute || activeInput?.config.initialMethod === "random"
+            ? "snapshot"
+            : "computed",
         cancelledStage: "search",
         durationMs: dur,
         durations: {
@@ -674,7 +697,10 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
       const searchMs = elapsed();
       engine.result.durationMs = searchMs;
       engine.result.cancelledStage = "search";
-      engine.result.initialRouteSource = activeInput?.initialRoute ? "snapshot" : "computed";
+      engine.result.initialRouteSource =
+        activeInput?.initialRoute || activeInput?.config.initialMethod === "random"
+          ? "snapshot"
+          : "computed";
       engine.result.durations = {
         constructionMs,
         preparationMs,

@@ -15,6 +15,9 @@ export function exportRun(run: RunResult) {
         schemaVersion: 2,
         ...run,
         closedInitialRoute: closedRoute(run.initialRoute, run.dataset),
+        closedPreparedInitialRoute: run.preparedInitialRoute
+          ? closedRoute(run.preparedInitialRoute, run.dataset)
+          : undefined,
         closedBestRoute: closedRoute(run.bestRoute, run.dataset),
       },
       null,
@@ -59,6 +62,10 @@ export function comparisonCsv(runs: RunResult[], sideMap?: Record<string, "A" | 
       "parameters",
       "initial_route",
       "best_route",
+      "data_seed",
+      "distribution",
+      "prepared_initial_distance",
+      "prepared_initial_route",
     ],
   ];
   for (const run of runs)
@@ -94,6 +101,12 @@ export function comparisonCsv(runs: RunResult[], sideMap?: Record<string, "A" | 
       JSON.stringify(run.config),
       closedRoute(run.initialRoute, run.dataset).join(" → "),
       closedRoute(run.bestRoute, run.dataset).join(" → "),
+      run.dataset.generator?.seed ?? "",
+      run.dataset.generator?.distribution ?? "",
+      run.preparedInitialCost ?? "",
+      run.preparedInitialRoute
+        ? closedRoute(run.preparedInitialRoute, run.dataset).join(" → ")
+        : "",
     ]);
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }

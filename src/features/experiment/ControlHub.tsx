@@ -38,6 +38,7 @@ export function ControlHub({
   ready,
   run,
   runs,
+  previewCost,
   onConfigChange,
   onStart,
   onPause,
@@ -53,6 +54,7 @@ export function ControlHub({
   ready: boolean;
   run: RunResult | null;
   runs: RunResult[];
+  previewCost?: number;
   onConfigChange: (config: RunConfig) => void;
   onStart: () => void;
   onPause: () => void;
@@ -93,7 +95,7 @@ export function ControlHub({
   const setCategory = (category: ExperimentCategory) => {
     let algorithm = config.algorithm;
     if (category === "construction") {
-      algorithm = config.initialMethod;
+      algorithm = config.initialMethod === "random" ? "NN" : config.initialMethod;
     } else if (category === "local-search") {
       algorithm = "2OPT";
     } else if (category === "metaheuristic") {
@@ -203,7 +205,7 @@ export function ControlHub({
                         },
                       ]}
                       onChange={(val) => {
-                        const m = val as InitialMethod;
+                        const m = val as "NN" | "NI" | "NFI";
                         onConfigChange({ ...config, initialMethod: m, algorithm: m });
                       }}
                       ariaLabel="Pilih metode konstruktif"
@@ -235,6 +237,16 @@ export function ControlHub({
                       disabled={busy}
                       value={config.initialMethod}
                       options={[
+                        ...(dataset.randomTourNodeIds &&
+                        dataset.randomTourNodeIds.length === dataset.nodes.length
+                          ? [
+                              {
+                                value: "random",
+                                label: "Rute Acak (Belum Diperbaiki)",
+                                description: "Snapshot permutasi acak awal tanpa optimasi",
+                              },
+                            ]
+                          : []),
                         {
                           value: "NN",
                           label: "Nearest Neighbor (NN)",
@@ -310,6 +322,16 @@ export function ControlHub({
                       disabled={busy}
                       value={config.initialMethod}
                       options={[
+                        ...(dataset.randomTourNodeIds &&
+                        dataset.randomTourNodeIds.length === dataset.nodes.length
+                          ? [
+                              {
+                                value: "random",
+                                label: "Rute Acak (Belum Diperbaiki)",
+                                description: "Snapshot permutasi acak awal tanpa optimasi",
+                              },
+                            ]
+                          : []),
                         {
                           value: "NN",
                           label: "Nearest Neighbor (NN)",
@@ -495,24 +517,36 @@ export function ControlHub({
           {/* Live Metrics Snapshot */}
           <div className="live-metrics-box">
             <div className="flex items-center justify-between mb-2">
-              <span className="box-title">HASIL TERBARU</span>
-              {run && (
+              <span className="box-title">{run ? "HASIL TERBARU" : "PRATINJAU RUTE"}</span>
+              {run ? (
                 <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
                   {stopLabels[run.stopReason] ?? run.stopReason}
+                </span>
+              ) : dataset.randomTourNodeIds ? (
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                  Rute acak awal — belum diperbaiki
+                </span>
+              ) : (
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                  Urutan data awal
                 </span>
               )}
             </div>
             <div className="metrics-grid">
               <div className="metric-cell primary">
-                <span className="metric-label">Jarak Terbaik</span>
+                <span className="metric-label">{run ? "Jarak Terbaik" : "Jarak Awal"}</span>
                 <strong className="metric-value font-tabular">
-                  {run ? formatDistance(run.bestCost) : "—"}
+                  {run
+                    ? formatDistance(run.bestCost)
+                    : previewCost !== undefined
+                      ? formatDistance(previewCost)
+                      : "—"}
                 </strong>
                 <small className="metric-sub">{dataset.unit}</small>
               </div>
 
               <div className="metric-cell">
-                <span className="metric-label">Peningkatan</span>
+                <span className="metric-label">{run ? "Peningkatan" : "Seed Data"}</span>
                 <strong className="metric-value font-tabular">
                   {run
                     ? run.category === "construction"
@@ -522,37 +556,53 @@ export function ControlHub({
                         : improvement < 0.01
                           ? "<0,01%"
                           : formatPercent(improvement)
-                    : "—"}
+                    : dataset.generator?.seed !== undefined
+                      ? dataset.generator.seed
+                      : "—"}
                 </strong>
                 <small className="metric-sub">
-                  Awal: {run ? formatDistance(run.initialCost) : "—"}
+                  {run
+                    ? `Awal: ${formatDistance(run.initialCost)}`
+                    : dataset.generator
+                      ? dataset.generator.isEdited
+                        ? "Telah diedit"
+                        : "Sintetis deterministik"
+                      : "Manual / Contoh"}
                 </small>
               </div>
 
               <div className="metric-cell">
                 <span className="metric-label">
-                  {run?.category === "local-search" ? "Langkah" : "Iterasi"}
+                  {run ? (run.category === "local-search" ? "Langkah" : "Iterasi") : "Distribusi"}
                 </span>
                 <strong className="metric-value font-tabular">
                   {run
                     ? run.category === "construction"
                       ? "—"
                       : run.iterations.toLocaleString("id-ID")
-                    : "—"}
+                    : dataset.generator
+                      ? dataset.generator.distribution === "cluster"
+                        ? `Cluster (${dataset.generator.clusterCount ?? 3})`
+                        : "Merata"
+                      : "Dataset aktif"}
                 </strong>
                 <small className="metric-sub">
-                  {run && run.category !== "construction"
-                    ? `${run.evaluations.toLocaleString("id-ID")} kandidat`
-                    : "Konstruktif"}
+                  {run
+                    ? run.category !== "construction"
+                      ? `${run.evaluations.toLocaleString("id-ID")} kandidat`
+                      : "Konstruktif"
+                    : `${dataset.nodes.length} node`}
                 </small>
               </div>
 
               <div className="metric-cell">
-                <span className="metric-label">Waktu</span>
+                <span className="metric-label">{run ? "Waktu" : "Status"}</span>
                 <strong className="metric-value font-tabular">
-                  {run ? formatDuration(run.durations?.totalMs ?? run.durationMs) : "—"}
+                  {run ? formatDuration(run.durations?.totalMs ?? run.durationMs) : "Belum Jalan"}
                 </strong>
-                <small className="metric-sub">{run ? getMethodShortLabel(run) : "Metode"}</small>
+                <small className="metric-sub">
+                  {run ? getMethodShortLabel(run) : "Klik Jalankan untuk memulai"}
+                </small>
               </div>
             </div>
           </div>

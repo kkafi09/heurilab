@@ -810,6 +810,16 @@ export function ReportView({
                       <span className="text-xs text-slate-500 block">
                         {runA.dataset.nodes.length} node · {runA.dataset.unit}
                       </span>
+                      {runA.dataset.generator && (
+                        <span className="text-[11px] text-teal-700 block mt-0.5">
+                          Distribusi:{" "}
+                          {runA.dataset.generator.distribution === "cluster"
+                            ? `Cluster (${runA.dataset.generator.clusterCount ?? 3})`
+                            : "Merata"}{" "}
+                          · Seed data: {runA.dataset.generator.seed}
+                          {runA.dataset.generator.isEdited ? " (telah diedit)" : ""}
+                        </span>
+                      )}
                     </td>
                     <td>
                       {runB ? (
@@ -818,6 +828,16 @@ export function ReportView({
                           <span className="text-xs text-slate-500 block">
                             {runB.dataset.nodes.length} node · {runB.dataset.unit}
                           </span>
+                          {runB.dataset.generator && (
+                            <span className="text-[11px] text-teal-700 block mt-0.5">
+                              Distribusi:{" "}
+                              {runB.dataset.generator.distribution === "cluster"
+                                ? `Cluster (${runB.dataset.generator.clusterCount ?? 3})`
+                                : "Merata"}{" "}
+                              · Seed data: {runB.dataset.generator.seed}
+                              {runB.dataset.generator.isEdited ? " (telah diedit)" : ""}
+                            </span>
+                          )}
                         </>
                       ) : (
                         "—"
@@ -825,19 +845,39 @@ export function ReportView({
                     </td>
                   </tr>
 
-                  {/* Baris 3: Titik Awal */}
+                  {/* Baris 3: Titik Awal & Solusi Awal */}
                   <tr>
-                    <td className="col-metric">Titik Awal (Start Node)</td>
+                    <td className="col-metric">Titik & Solusi Awal</td>
                     <td>
                       <span className="font-semibold text-slate-800">
                         Node {runA.config.startId}
                       </span>
+                      <span className="text-xs text-slate-600 block">
+                        Basis:{" "}
+                        {runA.config.initialMethod === "random"
+                          ? "Rute acak"
+                          : runA.config.initialMethod}
+                        {runA.config.improve !== "none" ? ` + ${runA.config.improve}` : ""}
+                        {runA.config.algorithm === "SA" ? ` · Seed SA: ${runA.config.seed}` : ""}
+                      </span>
                     </td>
                     <td>
                       {runB ? (
-                        <span className="font-semibold text-slate-800">
-                          Node {runB.config.startId}
-                        </span>
+                        <>
+                          <span className="font-semibold text-slate-800">
+                            Node {runB.config.startId}
+                          </span>
+                          <span className="text-xs text-slate-600 block">
+                            Basis:{" "}
+                            {runB.config.initialMethod === "random"
+                              ? "Rute acak"
+                              : runB.config.initialMethod}
+                            {runB.config.improve !== "none" ? ` + ${runB.config.improve}` : ""}
+                            {runB.config.algorithm === "SA"
+                              ? ` · Seed SA: ${runB.config.seed}`
+                              : ""}
+                          </span>
+                        </>
                       ) : (
                         "—"
                       )}

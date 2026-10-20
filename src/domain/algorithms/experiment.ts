@@ -9,6 +9,7 @@ import {
   type DistanceMatrix,
 } from "../tsp/model";
 export { EPSILON };
+import { tourNodeIdsToRoute } from "../tsp/randomGenerator";
 import {
   applyMove,
   moveDelta,
@@ -25,7 +26,7 @@ import {
 export type ExperimentCategory = "construction" | "local-search" | "metaheuristic";
 export type RunCategory = ExperimentCategory;
 export type RunSnapshot = Omit<RunResult, "trace">;
-export type InitialMethod = "NN" | "NI" | "NFI";
+export type InitialMethod = "random" | "NN" | "NI" | "NFI";
 export type ImprovementMethod = "none" | "2OPT" | "3OPT";
 export type AlgorithmType = "TS" | "SA" | "2OPT" | "3OPT" | "NN" | "NI" | "NFI";
 
@@ -116,6 +117,8 @@ export interface RunResult {
   preparationSteps?: number;
   preparationEvaluations?: number;
   initialRouteSource?: "computed" | "snapshot";
+  preparedInitialRoute?: Route;
+  preparedInitialCost?: number;
 }
 
 export interface RunInput {
@@ -134,8 +137,14 @@ export function validateConfig(config: RunConfig, dataset: Dataset): string[] {
   if (!["construction", "local-search", "metaheuristic"].includes(category)) {
     errors.push("Kategori eksperimen tidak valid.");
   }
-  if (!["NN", "NI", "NFI"].includes(config.initialMethod)) {
+  if (!["random", "NN", "NI", "NFI"].includes(config.initialMethod)) {
     errors.push("Metode solusi awal tidak valid.");
+  }
+  if (
+    config.initialMethod === "random" &&
+    (!dataset.randomTourNodeIds || dataset.randomTourNodeIds.length !== dataset.nodes.length)
+  ) {
+    errors.push("Rute acak belum tersedia untuk dataset ini.");
   }
   const improveChoice =
     typeof config.improve === "boolean" ? (config.improve ? "2OPT" : "none") : config.improve;
@@ -217,7 +226,24 @@ export function makeInitialRoute(
     throw new Error("Titik awal tidak ada di dataset.");
   }
   let route: Route;
-  if (config.initialMethod === "NN") {
+  if (config.initialMethod === "random") {
+    if (dataset.randomTourNodeIds && dataset.randomTourNodeIds.length === dataset.nodes.length) {
+      const mapped = tourNodeIdsToRoute(dataset.nodes, dataset.randomTourNodeIds, config.startId);
+      if (mapped) {
+        route = mapped;
+      } else {
+        route = Array.from(
+          { length: dataset.nodes.length },
+          (_, i) => (start + i) % dataset.nodes.length,
+        );
+      }
+    } else {
+      route = Array.from(
+        { length: dataset.nodes.length },
+        (_, i) => (start + i) % dataset.nodes.length,
+      );
+    }
+  } else if (config.initialMethod === "NN") {
     route = nearestNeighbor(dataset.nodes, matrix, start);
   } else if (config.initialMethod === "NI") {
     route = nearestInsertion(dataset.nodes, matrix, start);

@@ -405,3 +405,66 @@ test("responsif modal input manual pada mobile 390x844 tanpa horizontal overflow
   expect(noOverflow).toBe(true);
   await page.screenshot({ path: info.outputPath("mobile-input-manual.png") });
 });
+
+test("alur Generator dataset acak → rute acak belum diperbaiki → eksekusi Tabu Search", async ({
+  page,
+}) => {
+  await ready(page);
+
+  // 1. Buka dialog Generator dari toolbar kanvas
+  await page.getByRole("button", { name: "Generator" }).click();
+  const dialog = page.getByRole("dialog", { name: /Generator Dataset Acak/ });
+  await expect(dialog).toBeVisible();
+
+  // 2. Konfigurasi 15 node, distribusi Cluster, dan seed khusus
+  await dialog.getByLabel("Jumlah Node (3–100)").fill("15");
+  await dialog.getByLabel("Cluster (Kelompok)").check();
+  await dialog.getByLabel(/Gunakan seed tetap/).check();
+  await dialog.getByLabel(/Seed Data/).fill("12345");
+
+  // 3. Terapkan generator
+  await dialog.getByRole("button", { name: "Generate Dataset" }).click();
+  await expect(dialog).not.toBeVisible();
+
+  // 4. Verifikasi kanvas terbarui menjadi 15 node
+  await expect(page.getByText("15 Node ·")).toBeVisible();
+  // Strip rute preview menampilkan rute acak murni belum diperbaiki
+  await expect(page.getByText("Rute acak awal — belum diperbaiki").first()).toBeVisible();
+
+  // 5. Jalankan Tabu Search dengan solusi awal rute acak tersebut
+  await page.getByRole("button", { name: "Jalankan Metaheuristik" }).click();
+  await expect(page.getByText(/kandidat eligible|Batas iterasi/)).toBeVisible();
+  await expect(page.getByText(/RUTE TERBAIK/i)).toBeVisible();
+
+  // 6. Periksa metadata di Report View
+  await page.getByRole("button", { name: /Report/ }).click();
+  await expect(page.getByText("12345").first()).toBeVisible();
+  await expect(page.getByText(/Cluster/).first()).toBeVisible();
+});
+
+test("tombol pintas Acak 10 dan responsivitas modal generator pada mobile 390x844", async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await ready(page);
+
+  // 1. Buka modal Generator pada mobile dan pastikan tidak overflow
+  await page.getByRole("button", { name: "Generator" }).click();
+  const dialog = page.getByRole("dialog", { name: /Generator Dataset Acak/ });
+  await expect(dialog).toBeVisible();
+
+  const modalNoOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+  );
+  expect(modalNoOverflow).toBe(true);
+  await page.screenshot({ path: info.outputPath("mobile-generator-modal.png") });
+
+  // Tutup dengan Escape
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+
+  // 2. Klik tombol pintas Acak 10
+  await page.getByRole("button", { name: "Acak 10" }).click();
+  await expect(page.getByText("10 Node ·")).toBeVisible();
+  await expect(page.getByText("Rute acak awal — belum diperbaiki").first()).toBeVisible();
+});

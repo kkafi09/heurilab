@@ -4,6 +4,12 @@ import { defaultConfig, type RunConfig, type RunResult } from "../domain/algorit
 import type { SavedSession } from "../services/storage";
 import type { WorkerResponse } from "../services/protocol";
 import { getNextAvailableNodeId } from "../domain/tsp/manualInput";
+import {
+  generateRandomDataset,
+  validateGeneratorConfig,
+  rotateTourToStart,
+  type GeneratorConfig,
+} from "../domain/tsp/randomGenerator";
 export interface Workspace {
   dataset: Dataset;
   config: RunConfig;
@@ -29,6 +35,7 @@ export type Action =
   | { type: "remove_node"; id: string }
   | { type: "clear_nodes" }
   | { type: "random_nodes"; count: number }
+  | { type: "generate_dataset"; config: GeneratorConfig }
   | { type: "set_nodes"; nodes: TspNode[]; name?: string }
   | { type: "load_example" }
   | { type: "config"; config: RunConfig }
@@ -64,10 +71,14 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       const startId = action.dataset.nodes.some((node) => node.id === state.config.startId)
         ? state.config.startId
         : (action.dataset.nodes[0]?.id ?? "A");
+      const initialMethod =
+        state.config.initialMethod === "random" && !action.dataset.randomTourNodeIds
+          ? "NN"
+          : state.config.initialMethod;
       return {
         ...state,
         dataset: action.dataset,
-        config: { ...state.config, startId },
+        config: { ...state.config, startId, initialMethod },
         active: null,
         selectedId: null,
         error: null,
@@ -80,6 +91,16 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       const newDataset: Dataset = {
         ...state.dataset,
         nodes: newNodes,
+        generator: state.dataset.generator
+          ? { ...state.dataset.generator, isEdited: true }
+          : undefined,
+        randomTourNodeIds: state.dataset.randomTourNodeIds
+          ? [...state.dataset.randomTourNodeIds, nextId]
+          : undefined,
+        provenance:
+          state.dataset.generator && !state.dataset.generator.isEdited
+            ? `${state.dataset.provenance} (Telah diedit dari hasil generator: penambahan node).`
+            : state.dataset.provenance,
       };
       const startId = newNodes.some((node) => node.id === state.config.startId)
         ? state.config.startId
@@ -100,6 +121,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
         action.isHistoricalSnapshot && action.sourceDataset ? action.sourceDataset : state.dataset;
 
       const newNodes = [...baseDataset.nodes, ...action.nodes];
+      const newIds = action.nodes.map((n) => n.id);
       let newDataset: Dataset;
 
       if (action.isHistoricalSnapshot && action.sourceDataset) {
@@ -109,12 +131,24 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
           nodes: newNodes,
           unit: action.sourceDataset.unit,
           provenance: `Bercabang dari ${action.sourceDataset.name} dengan penambahan ${action.nodes.length} koordinat manual.`,
+          randomTourNodeIds: baseDataset.randomTourNodeIds
+            ? [...baseDataset.randomTourNodeIds, ...newIds]
+            : undefined,
         };
       } else {
         newDataset = {
           ...state.dataset,
           nodes: newNodes,
-          provenance: state.dataset.provenance || "Koordinat planar dengan penambahan manual.",
+          generator: state.dataset.generator
+            ? { ...state.dataset.generator, isEdited: true }
+            : undefined,
+          randomTourNodeIds: state.dataset.randomTourNodeIds
+            ? [...state.dataset.randomTourNodeIds, ...newIds]
+            : undefined,
+          provenance:
+            state.dataset.generator && !state.dataset.generator.isEdited
+              ? `${state.dataset.provenance} (Telah diedit dari hasil generator: penambahan node manual).`
+              : state.dataset.provenance || "Koordinat planar dengan penambahan manual.",
         };
       }
 
@@ -143,9 +177,20 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       const newNodes = state.dataset.nodes.map((node) =>
         node.id === action.id ? { ...node, x: action.x, y: action.y } : node,
       );
+      const newDataset: Dataset = {
+        ...state.dataset,
+        nodes: newNodes,
+        generator: state.dataset.generator
+          ? { ...state.dataset.generator, isEdited: true }
+          : undefined,
+        provenance:
+          state.dataset.generator && !state.dataset.generator.isEdited
+            ? `${state.dataset.provenance} (Telah diedit dari hasil generator: posisi node digeser).`
+            : state.dataset.provenance,
+      };
       return {
         ...state,
-        dataset: { ...state.dataset, nodes: newNodes },
+        dataset: newDataset,
         active: null,
         selectedId: null,
         error: null,
@@ -157,9 +202,23 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       const startId = newNodes.some((node) => node.id === state.config.startId)
         ? state.config.startId
         : (newNodes[0]?.id ?? "");
+      const newDataset: Dataset = {
+        ...state.dataset,
+        nodes: newNodes,
+        generator: state.dataset.generator
+          ? { ...state.dataset.generator, isEdited: true }
+          : undefined,
+        randomTourNodeIds: state.dataset.randomTourNodeIds
+          ? state.dataset.randomTourNodeIds.filter((id) => id !== action.id)
+          : undefined,
+        provenance:
+          state.dataset.generator && !state.dataset.generator.isEdited
+            ? `${state.dataset.provenance} (Telah diedit dari hasil generator: penghapusan node).`
+            : state.dataset.provenance,
+      };
       return {
         ...state,
-        dataset: { ...state.dataset, nodes: newNodes },
+        dataset: newDataset,
         config: { ...state.config, startId },
         active: null,
         selectedId: null,
@@ -170,44 +229,67 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
     case "clear_nodes": {
       return {
         ...state,
-        dataset: { ...state.dataset, nodes: [] },
-        config: { ...state.config, startId: "" },
+        dataset: {
+          ...state.dataset,
+          nodes: [],
+          generator: undefined,
+          randomTourNodeIds: undefined,
+        },
+        config: {
+          ...state.config,
+          startId: "",
+          initialMethod:
+            state.config.initialMethod === "random" ? "NN" : state.config.initialMethod,
+        },
         active: null,
         selectedId: null,
         error: null,
       };
     }
 
-    case "random_nodes": {
-      const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-      const count = Math.max(3, Math.min(action.count, 50));
-      const generated: TspNode[] = [];
-      const usedCoords = new Set<string>();
-      for (let i = 0; i < count; i++) {
-        let x = 0;
-        let y = 0;
-        let attempts = 0;
-        do {
-          x = Math.round((Math.random() * 20 - 10) * 10) / 10;
-          y = Math.round((Math.random() * 16 - 8) * 10) / 10;
-          attempts++;
-        } while (usedCoords.has(`${x},${y}`) && attempts < 50);
-        usedCoords.add(`${x},${y}`);
-        const id = i < 26 ? letters[i]! : `N${i + 1}`;
-        generated.push({ id, x, y });
+    case "generate_dataset": {
+      const errors = validateGeneratorConfig(action.config);
+      if (errors.length > 0) {
+        return { ...state, error: errors.join(" ") };
       }
-      return {
-        ...state,
-        dataset: {
-          ...state.dataset,
-          name: `Acak ${count} node`,
-          nodes: generated,
-        },
-        config: { ...state.config, startId: generated[0]!.id },
-        active: null,
-        selectedId: null,
-        error: null,
-      };
+      try {
+        const result = generateRandomDataset(action.config);
+        const startId = result.dataset.nodes[0]!.id;
+        return {
+          ...state,
+          dataset: result.dataset,
+          config: { ...state.config, startId, initialMethod: "random" },
+          active: null,
+          selectedId: null,
+          error: null,
+        };
+      } catch (err) {
+        return {
+          ...state,
+          error: err instanceof Error ? err.message : "Gagal membangkitkan dataset acak.",
+        };
+      }
+    }
+
+    case "random_nodes": {
+      const count = Math.max(3, Math.min(action.count, 100));
+      try {
+        const result = generateRandomDataset({ nodeCount: count, distribution: "uniform" });
+        const startId = result.dataset.nodes[0]!.id;
+        return {
+          ...state,
+          dataset: result.dataset,
+          config: { ...state.config, startId, initialMethod: "random" },
+          active: null,
+          selectedId: null,
+          error: null,
+        };
+      } catch (err) {
+        return {
+          ...state,
+          error: err instanceof Error ? err.message : "Gagal membangkitkan dataset acak.",
+        };
+      }
     }
 
     case "set_nodes": {
@@ -233,15 +315,30 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       return {
         ...state,
         dataset: exampleCopy,
-        config: { ...state.config, startId: exampleCopy.nodes[0]!.id },
+        config: {
+          ...state.config,
+          startId: exampleCopy.nodes[0]!.id,
+          initialMethod:
+            state.config.initialMethod === "random" ? "NN" : state.config.initialMethod,
+        },
         active: null,
         selectedId: null,
         error: null,
       };
     }
 
-    case "config":
-      return { ...state, config: action.config, error: null };
+    case "config": {
+      let dataset = state.dataset;
+      if (
+        action.config.startId !== state.config.startId &&
+        state.dataset.randomTourNodeIds &&
+        state.dataset.nodes.some((n) => n.id === action.config.startId)
+      ) {
+        const rotated = rotateTourToStart(state.dataset.randomTourNodeIds, action.config.startId);
+        dataset = { ...state.dataset, randomTourNodeIds: rotated };
+      }
+      return { ...state, dataset, config: action.config, error: null };
+    }
 
     case "start":
       return {
